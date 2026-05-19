@@ -1,0 +1,179 @@
+################################################################################
+# FILE         : .gitignore
+# DESCRIPTION  : Git exclusion rules for the Terraform enterprise repository.
+#
+# CRITICAL SECURITY RULE:
+#   The terraform.tfstate file MUST NEVER be committed to Git.
+#   It contains sensitive data in plaintext:
+#     - RDS master passwords (even marked sensitive, stored in state)
+#     - Private IP addresses of all resources
+#     - IAM role ARNs and policy content
+#     - Security group IDs and rules
+#     - Secrets Manager ARNs
+#   A publicly readable state file on GitHub is a complete infrastructure
+#   exposure. Remote S3 backend with encryption is the only safe option.
+#
+# AUTHOR       : DevOps Platform Engineering Team
+# REPOSITORY   : aws-enterprise-3tier-infrastructure-iac
+################################################################################
+
+################################################################################
+# TERRAFORM STATE FILES
+# Never commit local state — use S3 remote backend exclusively.
+################################################################################
+
+# Main state file — contains ALL resource data in plaintext
+terraform.tfstate
+
+# State backup created automatically before each apply
+terraform.tfstate.backup
+
+# State files in any subdirectory (bootstrap module, etc.)
+**/*.tfstate
+**/*.tfstate.backup
+
+# Terraform state lock info file (created during apply)
+.terraform.tfstate.lock.info
+
+################################################################################
+# TERRAFORM WORKING DIRECTORY
+# The .terraform directory contains downloaded provider plugins (50-200 MB).
+# Every engineer runs 'terraform init' to download these locally.
+# Never commit binary provider files — they are OS and architecture specific.
+################################################################################
+
+# Provider plugins, module caches, backend configuration
+.terraform/
+
+# Any nested .terraform directories in modules
+**/.terraform/
+
+################################################################################
+# TERRAFORM PLAN FILES
+# Plan files are binary outputs of 'terraform plan -out=plan.out'.
+# They can contain sensitive variable values in encoded form.
+# Never commit plan files — regenerate them fresh before each apply.
+################################################################################
+
+*.tfplan
+plan.out
+*.plan
+
+################################################################################
+# TERRAFORM VARIABLE FILES CONTAINING SECRETS
+# The main terraform.tfvars is committed (no secrets in our design).
+# Override files are developer-local and should never be committed.
+################################################################################
+
+# Local override files — used for developer-specific temporary values
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Auto-generated override file
+.terraformrc
+
+################################################################################
+# SENSITIVE CREDENTIAL FILES
+# These should never exist in the repository but are excluded as a
+# defence-in-depth measure in case someone accidentally creates them.
+################################################################################
+
+# AWS credential files
+.aws/
+credentials
+aws_credentials
+*.credentials
+
+# SSH private keys — never commit private keys
+*.pem
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Environment variable files that may contain secrets
+.env
+.env.*
+.envrc
+*.env
+
+################################################################################
+# TERRAFORM LOCK FILE
+# The dependency lock file SHOULD be committed — it pins provider versions
+# for the entire team. It is explicitly NOT ignored here.
+# .terraform.lock.hcl → COMMIT THIS FILE
+################################################################################
+
+# DO NOT ADD .terraform.lock.hcl here — it must be committed
+
+################################################################################
+# IDE AND EDITOR FILES
+# Developer tool artifacts — not part of the codebase
+################################################################################
+
+# JetBrains (IntelliJ, GoLand, PyCharm, WebStorm)
+.idea/
+*.iml
+*.iws
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+\#*\#
+.\#*
+
+################################################################################
+# OPERATING SYSTEM FILES
+################################################################################
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+
+################################################################################
+# LOGS AND TEMPORARY FILES
+################################################################################
+
+*.log
+*.tmp
+*.temp
+crash.log
+crash.*.log
+
+# Terraform debug logs (set by TF_LOG environment variable)
+terraform-debug.log
+tf-debug.log
+
+################################################################################
+# BOOTSTRAP STATE — INTENTIONALLY LOCAL
+# The bootstrap module uses local state by design (chicken-and-egg problem).
+# Its local state file is excluded from Git.
+# The bootstrap state is manually backed up to S3 after initial creation.
+################################################################################
+
+bootstrap/terraform.tfstate
+bootstrap/terraform.tfstate.backup
+bootstrap/.terraform/
