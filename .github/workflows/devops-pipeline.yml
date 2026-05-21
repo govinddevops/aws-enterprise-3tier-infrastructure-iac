@@ -1,41 +1,5 @@
-########################################################################
-# FILE         : .github/workflows/devops-pipeline.yml
-# DESCRIPTION  : Enterprise-Grade DevSecOps CI/CD Pipeline — Static
-#                Check Mode. Zero AWS credentials required. Runs 100%
-#                on GitHub-hosted free runners using offline analysis.
-#
-# PIPELINE STAGES:
-#   1. Secure Checkout & Terraform Plugin Cache Setup
-#   2. Terraform Format Check (fmt -check -recursive)
-#   3. Aqua Security Trivy — Static IaC Security Scan
-#   4. TFLint — Enterprise Linting (offline, all modules)
-#   5. Terraform Init (-backend=false) + Validate (all modules)
-#
-# SCALABILITY NOTE:
-#   This pipeline is architected for future Docker/Kubernetes expansion.
-#   The job structure, caching strategy, and stage naming conventions
-#   are designed so that Docker image scanning, Helm chart linting,
-#   and kubectl dry-run stages can be appended without modifying
-#   existing stages. Each stage is an independent job — adding new
-#   jobs never breaks existing ones.
-#
-# RUNNERS      : GitHub-hosted ubuntu-latest (100% FREE — 2,000 min/month)
-# CREDENTIALS  : NONE REQUIRED — pure static analysis mode
-# TRIGGERS     : Push + Pull Request on main and master branches
-#
-# AUTHOR       : DevOps Platform Engineering Team
-# REPOSITORY   : aws-enterprise-3tier-infrastructure-iac
-# MANAGED BY   : GitHub Actions
-########################################################################
-
 name: "🏗️ Enterprise DevSecOps Pipeline — AWS 3-Tier IaC"
 
-########################################################################
-# TRIGGER CONFIGURATION
-# Runs on every push and every pull request targeting main/master.
-# path-filter ensures the pipeline only runs when infrastructure
-# files actually change — not on README-only updates.
-########################################################################
 on:
   push:
     branches:
@@ -61,8 +25,6 @@ on:
       - ".tflint.hcl"
       - ".trivyignore"
       - ".github/workflows/**"
-
-  # Allow manual pipeline trigger from GitHub Actions UI
   workflow_dispatch:
     inputs:
       reason:
@@ -70,80 +32,35 @@ on:
         required: false
         default: "Manual verification run"
 
-########################################################################
-# GLOBAL ENVIRONMENT VARIABLES
-# Centralised version pinning — update versions here only.
-# All jobs inherit these automatically.
-########################################################################
 env:
   TF_VERSION: "1.6.6"
   TFLINT_VERSION: "v0.50.3"
-  # Disable Terraform checkpoint calls (no external HTTP calls in pipeline)
   CHECKPOINT_DISABLE: "1"
-  # Disable Terraform colour codes for clean log output
   TF_CLI_ARGS: "-no-color"
-  # Plugin cache directory shared across all steps
   TF_PLUGIN_CACHE_DIR: "${{ github.workspace }}/.terraform.d/plugin-cache"
 
-########################################################################
-# WORKFLOW-LEVEL PERMISSIONS
-# Principle of Least Privilege applied at the workflow level.
-# Each job inherits these and cannot exceed them.
-# security-events: write  — needed for Trivy SARIF upload to Security tab
-# pull-requests: write    — needed for automated PR comment posting
-########################################################################
 permissions:
   contents: read
   pull-requests: write
   security-events: write
   actions: read
 
-########################################################################
-# CONCURRENCY CONTROL
-# Prevents multiple pipeline runs for the same branch/PR from
-# running simultaneously. If a new push comes in while a run is
-# in progress, the old run is cancelled and the new one starts.
-# This saves GitHub Actions minutes and prevents race conditions.
-########################################################################
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
-########################################################################
-# JOBS
-########################################################################
 jobs:
 
-  ##########################################################################
-  # JOB 1: SECURE CHECKOUT AND TERRAFORM PLUGIN CACHE SETUP
-  #
-  # PURPOSE:
-  #   Checks out the repository securely and pre-warms the Terraform
-  #   provider plugin cache. This cache is shared with Stage 5 (validate)
-  #   so providers are downloaded once and reused — reducing pipeline
-  #   execution time by 40-60% on subsequent runs.
-  #
-  # SCALABILITY NOTE:
-  #   Cache key includes hashes of all .tf files and lock files.
-  #   When Docker/Helm files are added in the future, extend the
-  #   cache paths block to include ~/.helm and ~/.docker without
-  #   touching the existing terraform cache configuration.
-  ##########################################################################
   stage-1-checkout-and-cache:
     name: "📦 Stage 1 — Secure Checkout & Cache Setup"
     runs-on: ubuntu-latest
-
     outputs:
-      # Expose cache hit status so downstream jobs can log it
       terraform-cache-hit: ${{ steps.terraform-cache.outputs.cache-hit }}
-
     steps:
       - name: "🔐 Secure Repository Checkout"
         uses: actions/checkout@v4
         with:
-          # Full history fetch for accurate git blame and diff analysis
           fetch-depth: 0
-          # Prevent credential persistence — security hardening
           persist-credentials: false
 
       - name: "📋 Pipeline Execution Context"
@@ -172,14 +89,11 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-          # Disable wrapper script — gives raw terraform output
-          # Required for clean stdout parsing in validate stage
           terraform_wrapper: false
 
       - name: "📁 Create Terraform Plugin Cache Directory"
         run: |
           mkdir -p ${{ env.TF_PLUGIN_CACHE_DIR }}
-          echo "Plugin cache directory: ${{ env.TF_PLUGIN_CACHE_DIR }}"
 
       - name: "⚡ Cache Terraform Provider Plugins"
         id: terraform-cache
@@ -188,8 +102,6 @@ jobs:
           path: |
             ${{ env.TF_PLUGIN_CACHE_DIR }}
             ~/.terraform.d
-          # Cache key: OS + Terraform version + hash of all lock and tf files
-          # If any .tf file changes, cache is invalidated and rebuilt
           key: ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-${{ hashFiles('**/.terraform.lock.hcl', '**/*.tf') }}
           restore-keys: |
             ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-
@@ -197,10 +109,7 @@ jobs:
 
       - name: "✅ Verify Terraform Installation"
         run: |
-          echo "Terraform version:"
           terraform version
-          echo ""
-          echo "Terraform binary path: $(which terraform)"
           echo "Cache hit: ${{ steps.terraform-cache.outputs.cache-hit }}"
 
       - name: "📊 Repository Infrastructure Audit"
@@ -209,15 +118,10 @@ jobs:
           echo "║          REPOSITORY STRUCTURE AUDIT                  ║"
           echo "╚══════════════════════════════════════════════════════╝"
           echo ""
-          echo "Terraform Files Discovered:"
-          echo "───────────────────────────"
-          find . -type f -name "*.tf" \
-            | grep -v ".terraform/" \
-            | sort \
-            | while read f; do
-                size=$(wc -l < "$f")
-                echo "  [${size} lines]  $f"
-              done
+          find . -type f -name "*.tf" | grep -v ".terraform/" | sort | while read f; do
+            size=$(wc -l < "$f")
+            echo "  [${size} lines]  $f"
+          done
           echo ""
           TF_FILE_COUNT=$(find . -name "*.tf" | grep -v ".terraform/" | wc -l)
           TFVARS_COUNT=$(find . -name "*.tfvars" | grep -v ".terraform/" | wc -l)
@@ -226,34 +130,12 @@ jobs:
           echo "  Total .tf files    : ${TF_FILE_COUNT}"
           echo "  Total .tfvars files: ${TFVARS_COUNT}"
           echo "  Custom modules     : ${MODULE_COUNT}"
-          echo ""
           echo "══════════════════════════════════════════════════════"
 
-  ##########################################################################
-  # JOB 2: TERRAFORM FORMAT CHECK
-  #
-  # PURPOSE:
-  #   Enforces canonical Terraform HCL formatting across every .tf file
-  #   in the repository including all module subdirectories.
-  #   Uses 'terraform fmt -check -recursive' which exits non-zero if
-  #   any file deviates from canonical style — failing the pipeline.
-  #
-  # WHY THIS MATTERS:
-  #   In enterprise teams, inconsistent formatting causes noisy diffs,
-  #   complicates peer reviews, and signals low code quality to auditors.
-  #   Enforcing fmt in CI means the codebase is always clean regardless
-  #   of each developer's local editor settings.
-  #
-  # SCALABILITY NOTE:
-  #   When Dockerfile and Helm chart files are added, extend this job
-  #   with hadolint (Dockerfile linter) and helm lint steps beneath
-  #   the existing terraform fmt step — zero changes to existing steps.
-  ##########################################################################
   stage-2-terraform-format:
     name: "🎨 Stage 2 — Terraform Format Check"
     runs-on: ubuntu-latest
     needs: stage-1-checkout-and-cache
-
     steps:
       - name: "🔐 Secure Repository Checkout"
         uses: actions/checkout@v4
@@ -270,41 +152,10 @@ jobs:
       - name: "🎨 Terraform Format Check — Recursive"
         id: fmt-check
         run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║          TERRAFORM FORMAT ANALYSIS                   ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          echo ""
-          echo "Command: terraform fmt -check -recursive -diff ."
-          echo "Scope  : All .tf files in repository (recursive)"
-          echo ""
-          echo "──────────────────────────────────────────────────────"
-
-          # -check     : Check mode — do not rewrite files, exit 1 if diff found
-          # -recursive : Check all subdirectories
-          # -diff      : Show exact diff of what would change
           if terraform fmt -check -recursive -diff .; then
-            echo "──────────────────────────────────────────────────────"
-            echo ""
             echo "✅ FORMAT CHECK PASSED"
-            echo "   All Terraform files comply with canonical HCL formatting."
-            echo "   No style violations detected."
-            echo ""
-            echo "══════════════════════════════════════════════════════"
           else
-            echo "──────────────────────────────────────────────────────"
-            echo ""
             echo "❌ FORMAT CHECK FAILED"
-            echo ""
-            echo "   One or more .tf files do not match canonical format."
-            echo "   The diff above shows exactly what needs to change."
-            echo ""
-            echo "   ► FIX COMMAND (run locally):"
-            echo "     terraform fmt -recursive"
-            echo ""
-            echo "   ► Then commit and push the reformatted files:"
-            echo "     git add -A && git commit -m 'style: apply terraform fmt'"
-            echo ""
-            echo "══════════════════════════════════════════════════════"
             exit 1
           fi
 
@@ -318,38 +169,14 @@ jobs:
             const passed  = outcome === 'success';
             const icon    = passed ? '✅' : '❌';
             const status  = passed ? 'PASSED' : 'FAILED';
-
-            const fixNote = passed
-              ? '_All Terraform files comply with canonical HCL formatting._'
-              : [
-                  '**Action Required:** One or more `.tf` files have formatting violations.',
-                  '',
-                  'Fix locally by running:',
-                  '```bash',
-                  'terraform fmt -recursive',
-                  'git add -A',
-                  'git commit -m "style: apply terraform fmt"',
-                  'git push',
-                  '
-```'
-                ].join('\n');
-
             const body = [
-              ## ${icon} Stage 2 — Terraform Format Check — ${status},
-              '',
-              | Field | Value |,
-              |-------|-------|,
-              | **Terraform Version** | \${{ env.TF_VERSION }}\ |,
-              | **Scope** | Recursive — all \.tf\ files |,
-              | **Commit** | \${{ github.sha }}\ |,
-              | **Result** | ${status} |,
-              '',
-              fixNote,
-              '',
-              '---',
-              '*Automated check by Enterprise DevSecOps Pipeline*'
+              `## ${icon} Stage 2 — Terraform Format Check — ${status}`,
+              `| Field | Value |`,
+              `|---|---|`,
+              `| **Terraform Version** | \`${{ env.TF_VERSION }}\` |`,
+              `| **Scope** | Recursive — all \`.tf\` files |`,
+              `| **Result** | ${status} |`
             ].join('\n');
-
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner:        context.repo.owner,
@@ -357,38 +184,10 @@ jobs:
               body:         body
             });
 
-  ##########################################################################
-  # JOB 3: AQUA SECURITY TRIVY — STATIC IaC SECURITY SCAN
-  #
-  # PURPOSE:
-  #   Scans the entire repository statically for:
-  #   1. IaC Misconfigurations — Terraform resources violating CIS AWS
-  #      benchmarks, NIST controls, and AWS Well-Architected best practices
-  #   2. Hardcoded Secrets — API keys, passwords, tokens accidentally
-  #      committed to source code
-  #
-  # OUTPUT:
-  #   - Table format: human-readable console output in pipeline logs
-  #   - SARIF format: uploaded to GitHub Security → Code Scanning Alerts
-  #     tab for persistent, searchable security findings
-  #
-  # NO CREDENTIALS REQUIRED:
-  #   Trivy operates in pure static analysis mode — it reads .tf files
-  #   and checks them against its built-in ruleset database.
-  #   Zero network calls to AWS are made during this stage.
-  #
-  # SCALABILITY NOTE:
-  #   When Docker is added, extend this job with:
-  #     scan-type: "image"
-  #     image-ref: "your-app:latest"
-  #   Trivy natively supports container image scanning — same action,
-  #   different parameters. The SARIF upload step works for both.
-  ##########################################################################
   stage-3-trivy-security-scan:
     name: "🔐 Stage 3 — Aqua Trivy Security Scan"
     runs-on: ubuntu-latest
     needs: stage-1-checkout-and-cache
-
     steps:
       - name: "🔐 Secure Repository Checkout"
         uses: actions/checkout@v4
@@ -396,23 +195,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: "📋 Security Scan Context"
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║         AQUA SECURITY TRIVY — SCAN INITIALISING      ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          echo ""
-          echo "  Scanner     : Aqua Security Trivy (aquasecurity/trivy-action)"
-          echo "  Scan Type   : Filesystem — Static IaC Analysis"
-          echo "  Scan Target : Entire Repository"
-          echo "  Scanners    : misconfiguration + secret"
-          echo "  Severities  : CRITICAL, HIGH, MEDIUM, LOW"
-          echo "  Mode        : 100% Offline — Zero AWS credentials required"
-          echo "  Output      : Table (console) + SARIF (GitHub Security tab)"
-          echo ""
-          echo "══════════════════════════════════════════════════════"
-
-      - name: "🛡️ Trivy Scan — SARIF Output (GitHub Security Tab)"
+      - name: "🛡️ Trivy Scan — SARIF Output"
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
@@ -421,18 +204,10 @@ jobs:
           format: "sarif"
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH,MEDIUM,LOW"
-          # exit-code 0 — report findings but do not fail the pipeline
-          # Change to 1 to make CRITICAL findings break the build
           exit-code: "0"
-          # Exclude directories that are not IaC source files
           skip-dirs: ".terraform,.git,node_modules"
-          # Include unfixed findings for complete visibility
           ignore-unfixed: false
-          # Timeout for large repositories
           timeout: "10m0s"
-        env:
-          # Disable Trivy telemetry in CI
-          TRIVY_NO_PROGRESS: "false"
 
       - name: "📊 Trivy Scan — Human Readable Table Output"
         uses: aquasecurity/trivy-action@master
@@ -449,82 +224,15 @@ jobs:
 
       - name: "📤 Upload Trivy SARIF to GitHub Security Tab"
         uses: github/codeql-action/upload-sarif@v3
-        # Always run this step so findings appear even if scan had issues
         if: always()
         with:
           sarif_file: "trivy-results.sarif"
-          # Category label in GitHub Security → Code Scanning
           category: "trivy-iac-misconfiguration-scan"
 
-      - name: "📋 Security Scan Summary"
-        if: always()
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║          TRIVY SECURITY SCAN — COMPLETE              ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          echo ""
-          echo "  Scan completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo ""
-
-          if [ -f "trivy-results.sarif" ]; then
-            echo "  SARIF file generated: trivy-results.sarif"
-            SARIF_SIZE=$(wc -c < trivy-results.sarif)
-            echo "  SARIF file size: ${SARIF_SIZE} bytes"
-            echo ""
-
-            # Count total findings using python (available on ubuntu-latest)
-            FINDING_COUNT=$(python3 -c "
-          import json, sys
-          try:
-              with open('trivy-results.sarif') as f:
-                  data = json.load(f)
-              runs = data.get('runs', [])
-              total = sum(len(r.get('results', [])) for r in runs)
-              print(total)
-          except Exception as e:
-              print('0')
-          ")
-            echo "  Total findings reported: ${FINDING_COUNT}"
-          fi
-
-          echo ""
-          echo "  View full security report:"
-          echo "  GitHub Repository → Security → Code Scanning Alerts"
-          echo ""
-          echo "══════════════════════════════════════════════════════"
-
-  ##########################################################################
-  # JOB 4: TFLINT — ENTERPRISE TERRAFORM LINTING
-  #
-  # PURPOSE:
-  #   TFLint catches errors that 'terraform validate' cannot detect:
-  #   - Invalid AWS resource attribute values (wrong instance types, regions)
-  #   - Deprecated API arguments scheduled for removal
-  #   - Missing required tags on resources
-  #   - Naming convention violations
-  #   - Variables declared but never used
-  #   - Outputs referencing non-existent resources
-  #
-  # OFFLINE MODE:
-  #   TFLint is initialised with --config pointing to our .tflint.hcl file.
-  #   The AWS plugin is pre-downloaded during init and cached.
-  #   Zero AWS API calls are made — purely static rule evaluation.
-  #
-  # SCOPE:
-  #   Root module + all 6 child modules analysed independently.
-  #   This provides precise module-level error isolation — you know
-  #   exactly which module has a violation without searching.
-  #
-  # SCALABILITY NOTE:
-  #   When Helm charts are added, append a 'helm lint' step here.
-  #   When Kubernetes manifests are added, append a 'kubeval' step.
-  #   The existing TFLint steps remain completely untouched.
-  ##########################################################################
   stage-4-tflint-analysis:
     name: "🔍 Stage 4 — TFLint Enterprise Linting"
     runs-on: ubuntu-latest
     needs: stage-2-terraform-format
-
     steps:
       - name: "🔐 Secure Repository Checkout"
         uses: actions/checkout@v4
@@ -537,11 +245,6 @@ jobs:
         with:
           tflint_version: ${{ env.TFLINT_VERSION }}
 
-      - name: "✅ Verify TFLint Installation"
-        run: |
-          tflint --version
-          echo "TFLint path: $(which tflint)"
-
       - name: "📦 Cache TFLint AWS Ruleset Plugin"
         uses: actions/cache@v4
         with:
@@ -549,169 +252,38 @@ jobs:
           key: ${{ runner.os }}-tflint-${{ env.TFLINT_VERSION }}-${{ hashFiles('.tflint.hcl') }}
           restore-keys: |
             ${{ runner.os }}-tflint-${{ env.TFLINT_VERSION }}-
-            ${{ runner.os }}-tflint-
 
       - name: "🔌 Initialize TFLint — Download AWS Ruleset"
-        run: |
-          echo "Initializing TFLint with AWS ruleset plugin..."
-          tflint --init --config=.tflint.hcl
-          echo ""
-          echo "TFLint plugins directory:"
-          ls -la ~/.tflint.d/plugins/ 2>/dev/null || echo "(using cached plugins)"
+        run: tflint --init --config=.tflint.hcl
 
       - name: "🔍 TFLint — Root Module"
         id: lint-root
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TFLINT ANALYSIS — ROOT MODULE                       ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          tflint \
-            --config="$(pwd)/.tflint.hcl" \
-            --format=compact \
-            --chdir="." \
-            && echo "✅ ROOT MODULE — LINT PASSED" \
-            || echo "⚠️  ROOT MODULE — VIOLATIONS FOUND (review above)"
-          echo "══════════════════════════════════════════════════════"
+        run: tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="." || echo "Violation found"
 
       - name: "🔍 TFLint — modules/vpc"
         id: lint-vpc
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TFLINT ANALYSIS — modules/vpc                       ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          tflint \
-            --config="$(pwd)/.tflint.hcl" \
-            --format=compact \
-            --chdir="modules/vpc" \
-            && echo "✅ VPC MODULE — LINT PASSED" \
-            || echo "⚠️  VPC MODULE — VIOLATIONS FOUND (review above)"
-          echo "══════════════════════════════════════════════════════"
+        run: tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/vpc" || echo "Violation found"
 
       - name: "🔍 TFLint — modules/security_groups"
         id: lint-sg
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TFLINT ANALYSIS — modules/security_groups           ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          tflint \
-            --config="$(pwd)/.tflint.hcl" \
-            --format=compact \
-            --chdir="modules/security_groups" \
-            && echo "✅ SECURITY GROUPS MODULE — LINT PASSED" \
-            || echo "⚠️  SECURITY GROUPS MODULE — VIOLATIONS FOUND"
-          echo "══════════════════════════════════════════════════════"
+        run: tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/security_groups" || echo "Violation found"
 
       - name: "🔍 TFLint — modules/alb"
         id: lint-alb
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TFLINT ANALYSIS — modules/alb                       ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          tflint \
-            --config="$(pwd)/.tflint.hcl" \
-            --format=compact \
-            --chdir="modules/alb" \
-            && echo "✅ ALB MODULE — LINT PASSED" \
-            || echo "⚠️  ALB MODULE — VIOLATIONS FOUND (review above)"
-          echo "══════════════════════════════════════════════════════"
+        run: tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/alb" || echo "Violation found"
 
       - name: "🔍 TFLint — modules/iam"
         id: lint-iam
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TFLINT ANALYSIS — modules/iam                       ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          tflint \
-            --config="$(pwd)/.tflint.hcl" \
-            --format=compact \
-            --chdir="modules/iam" \
-            && echo "✅ IAM MODULE — LINT PASSED" \
-            || echo "⚠️  IAM MODULE — VIOLATIONS FOUND (review above)"
-          echo "══════════════════════════════════════════════════════"
+        run: tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/iam" || echo "Violation found"
 
       - name: "🔍 TFLint — modules/compute"
         id: lint-compute
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TFLINT ANALYSIS — modules/compute                   ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          tflint \
-            --config="$(pwd)/.tflint.hcl" \
-            --format=compact \
-            --chdir="modules/compute" \
-            && echo "✅ COMPUTE MODULE — LINT PASSED" \
-            || echo "⚠️  COMPUTE MODULE — VIOLATIONS FOUND (review above)"
-          echo "══════════════════════════════════════════════════════"
+        run: tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/compute" || echo "Violation found"
 
       - name: "🔍 TFLint — modules/rds"
         id: lint-rds
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TFLINT ANALYSIS — modules/rds                       ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          tflint \
-            --config="$(pwd)/.tflint.hcl" \
-            --format=compact \
-            --chdir="modules/rds" \
-            && echo "✅ RDS MODULE — LINT PASSED" \
-            || echo "⚠️  RDS MODULE — VIOLATIONS FOUND (review above)"
-          echo "══════════════════════════════════════════════════════"
+        run: tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/rds" || echo "Violation found"
 
-      - name: "📊 TFLint Complete Summary"
-        if: always()
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║          TFLINT ANALYSIS — COMPLETE SUMMARY          ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          echo ""
-          echo "  Modules Analysed:"
-          echo "    Root Module            : ${{ steps.lint-root.outcome }}"
-          echo "    modules/vpc            : ${{ steps.lint-vpc.outcome }}"
-          echo "    modules/security_groups: ${{ steps.lint-sg.outcome }}"
-          echo "    modules/alb            : ${{ steps.lint-alb.outcome }}"
-          echo "    modules/iam            : ${{ steps.lint-iam.outcome }}"
-          echo "    modules/compute        : ${{ steps.lint-compute.outcome }}"
-          echo "    modules/rds            : ${{ steps.lint-rds.outcome }}"
-          echo ""
-          echo "  TFLint Rules Applied:"
-          echo "    → aws_instance_invalid_type"
-          echo "    → terraform_naming_convention"
-          echo "    → terraform_documented_variables"
-          echo "    → terraform_documented_outputs"
-          echo "    → terraform_comment_syntax"
-          echo ""
-          echo "══════════════════════════════════════════════════════"
-
-  ##########################################################################
-  # JOB 5: TERRAFORM INIT (-backend=false) + VALIDATE — ALL MODULES
-  #
-  # PURPOSE:
-  #   Performs deep structural validation of all Terraform configurations.
-  #   'terraform validate' checks things neither fmt nor TFLint can catch:
-  #   - Module source paths resolve correctly
-  #   - Variable types match their usage in resource blocks
-  #   - Resource argument names are valid for the provider schema
-  #   - Output values reference existing attributes
-  #   - Circular dependencies between resources
-  #   - Count/for_each expressions are valid
-  #
-  # -backend=false EXPLAINED:
-  #   Normally, 'terraform init' connects to the S3 remote backend.
-  #   This requires AWS credentials — which we deliberately do NOT have.
-  #   The '-backend=false' flag skips backend initialisation entirely.
-  #   Terraform initialises providers locally from its registry cache,
-  #   which is sufficient for structural validation.
-  #   Zero AWS credentials needed. Zero S3 bucket needed. 100% static.
-  #
-  # SCOPE:
-  #   Root module + all 6 child modules validated independently.
-  #   A failure in one module is isolated — other modules still validate.
-  #
-  # SCALABILITY NOTE:
-  #   When EKS Terraform module is added (modules/eks/), simply add
-  #   two new steps: Init EKS + Validate EKS. All existing steps
-  #   remain unchanged. The summary step auto-reflects the new module.
-  ##########################################################################
   stage-5-terraform-validate:
     name: "✅ Stage 5 — Terraform Validate (All Modules)"
     runs-on: ubuntu-latest
@@ -719,7 +291,6 @@ jobs:
       - stage-2-terraform-format
       - stage-3-trivy-security-scan
       - stage-4-tflint-analysis
-
     steps:
       - name: "🔐 Secure Repository Checkout"
         uses: actions/checkout@v4
@@ -742,182 +313,71 @@ jobs:
           key: ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-${{ hashFiles('**/.terraform.lock.hcl', '**/*.tf') }}
           restore-keys: |
             ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-
-            ${{ runner.os }}-terraform-
 
       - name: "📁 Configure Terraform Plugin Cache Path"
         run: |
           mkdir -p ${{ env.TF_PLUGIN_CACHE_DIR }}
-          # Write Terraform CLI configuration to use cache directory
           cat > ~/.terraformrc << 'TFRC'
           plugin_cache_dir   = "$HOME/.terraform.d/plugin-cache"
           disable_checkpoint = true
           TFRC
-          echo "Terraform CLI config written to ~/.terraformrc"
-          cat ~/.terraformrc
 
-      # ── ROOT MODULE ───────────────────────────────────────────────────
-      - name: "📦 Terraform Init — Root Module (-backend=false)"
+      - name: "📦 Terraform Init — Root Module"
         id: init-root
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TERRAFORM INIT — ROOT MODULE                        ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          echo ""
-          echo "Flags: -backend=false -input=false -no-color"
-          echo "Reason: Static validation only — no AWS credentials required"
-          echo ""
-          terraform init \
-            -backend=false \
-            -input=false \
-            -no-color
-          echo ""
-          echo "✅ Root Module Init — Complete"
-          echo "══════════════════════════════════════════════════════"
+        run: terraform init -backend=false -input=false -no-color
 
       - name: "✅ Terraform Validate — Root Module"
         id: validate-root
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TERRAFORM VALIDATE — ROOT MODULE                    ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          terraform validate -no-color
-          echo ""
-          echo "✅ ROOT MODULE — STRUCTURAL VALIDATION PASSED"
-          echo "══════════════════════════════════════════════════════"
+        run: terraform validate -no-color
 
-      # ── VPC MODULE ────────────────────────────────────────────────────
       - name: "📦 Terraform Init — modules/vpc"
         id: init-vpc
-        run: |
-          echo "Initialising modules/vpc..."
-          terraform -chdir=modules/vpc init \
-            -backend=false \
-            -input=false \
-            -no-color
-          echo "✅ modules/vpc — Init Complete"
+        run: terraform -chdir=modules/vpc init -backend=false -input=false -no-color
 
       - name: "✅ Terraform Validate — modules/vpc"
         id: validate-vpc
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TERRAFORM VALIDATE — modules/vpc                    ║"
-          echo "╚═══════════════════�═══════════════════════════════╝"
-          terraform -chdir=modules/vpc validate -no-color
-          echo ""
-          echo "✅ VPC MODULE — STRUCTURAL VALIDATION PASSED"
-          echo "══════════════════════════════════════════════════════"
+        run: terraform -chdir=modules/vpc validate -no-color
 
-      # ── SECURITY GROUPS MODULE ───────────────────────────────────────
       - name: "📦 Terraform Init — modules/security_groups"
         id: init-sg
-        run: |
-          echo "Initialising modules/security_groups..."
-          terraform -chdir=modules/security_groups init \
-            -backend=false \
-            -input=false \
-            -no-color
-          echo "✅ modules/security_groups — Init Complete"
+        run: terraform -chdir=modules/security_groups init -backend=false -input=false -no-color
 
       - name: "✅ Terraform Validate — modules/security_groups"
         id: validate-sg
-    run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TERRAFORM VALIDATE — modules/security_groups        ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          terraform -chdir=modules/security_groupslidate -no-color
-          echo ""
-          echo "✅ SECURITY GROUPS MODULE — STRUCTURAL VALIDATION PASSED"
-          echo "══════════════════════════════════════════════════════"
+        run: terraform -chdir=modules/security_groups validate -no-color
 
-      # ── ALB MODULE ────────────────────────────────────────────────────
-      - name: "📦 Terraform Init �ules/alb"
+      - name: "📦 Terraform Init — modules/alb"
         id: init-alb
-        run: |
-          echo "Initialising modules/alb..."
-          terraform -chdir=modules/alb init \
-            -backend=false \
-            -input=false \
-            -no-color
-          echo "✅ modules/alb — Init Complete"
+        run: terraform -chdir=modules/alb init -backend=false -input=false -no-color
 
       - name: "✅ Terraform Validate — modules/alb"
         id: validate-alb
-        run: |
-          echo "╔═══════════════════════════════════════════�══════╗"
-          echo "║  TERRAFORM VALIDATE — modules/alb                    ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          terraform -chdir=modules/alb validate -no-color
-          echo ""
-          echo "✅ ALB MODULE — STRUCTURAL VALIDATION PASSED"
-          echo "════════════════════════════════════════════════"
+        run: terraform -chdir=modules/alb validate -no-color
 
-      # ── IAM MODULE ────────────────────────────────────────────────────
       - name: "📦 Terraform Init — modules/iam"
         id: init-iam
-        run: |
-          echo "Initialising modules/iam..."
-          terraform -chdir=modules/iam init \
-            -backend=false \
-            -input=false \
-            -r
-          echo "✅ modules/iam — Init Complete"
+        run: terraform -chdir=modules/iam init -backend=false -input=false -no-color
 
       - name: "✅ Terraform Validate — modules/iam"
         id: validate-iam
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TERRAFORM VALIDATE — modules/iam                    ║"
-          echo "╚═════════════════════════════════════════════════════╝"
-          terraform -chdir=modules/iam validate -no-color
-          echo ""
-          echo "✅ IAM MODULE — STRUCTURAL VALIDATION PASSED"
-          echo "══════════════════════════════════════════════════════"
+        run: terraform -chdir=modules/iam validate -no-color
 
-      # ── COMPUTE MODULE ────────────────────────�──────────────────
       - name: "📦 Terraform Init — modules/compute"
         id: init-compute
-        run: |
-          echo "Initialising modules/compute..."
-          terraform -chdir=modules/compute init \
-            -backend=false \
-            -input=false \
-            -no-color
-          echo "✅ modules/compute — Init Complete"
+        run: terraform -chdir=modules/compute init -backend=false -input=false -no-color
 
       - name: "✅ Terraform Validate — modules/compute"
         id: validate-compute
-        run: |
-          echo "╔════════════════════════════════════════════════╗"
-          echo "║  TERRAFORM VALIDATE — modules/compute                ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          terraform -chdir=modules/compute validate -no-color
-          echo ""
-          echo "✅ COMUTE MODULE — STRUCTURAL VALIDATION PASSED"
-          echo "══════════════════════════════════════════════════════"
+        run: terraform -chdir=modules/compute validate -no-color
 
-      # ── RDS MODULE ────────────────────────────────────────────────────
       - name: "📦 Terraform Init — modules/rds"
         id: init-rds
-        run: |
-          echo ialising modules/rds..."
-          terraform -chdir=modules/rds init \
-            -backend=false \
-            -input=false \
-            -no-color
-          echo "✅ modules/rds — Init Complete"
+        run: terraform -chdir=modules/rds init -backend=false -input=false -no-color
 
       - name: "✅ Terraform Validate — modules/rds"
         id: validate-rds
-        run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  TERRAFORMVALIDATE — modules/rds                    ║"
-          echo "╚══════════════════════════════════════════════════════╝"
-          terraform -chdir=modules/rds validate -no-color
-          echo ""
-          echo "✅ RDS MODULE — STRUCTURAL VALIDATION PASSED"
-          echo "══════════════════════════════════════════════════"
+        run: terraform -chdir=modules/rds validate -no-color
 
-      # ── FINAL SUMMARY ─────────────────────────────────────────────────
       - name: "📊 Post Complete Validation Report to Pull Request"
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -925,34 +385,24 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const modules = [
-              { naRoot Module',             init: '${{ steps.init-root.outcome }}',    validate: '${{ steps.validate-root.outcome }}'    },
+              { name: 'Root Module',             init: '${{ steps.init-root.outcome }}',    validate: '${{ steps.validate-root.outcome }}'    },
               { name: 'modules/vpc',             init: '${{ steps.init-vpc.outcome }}',     validate: '${{ steps.validate-vpc.outcome }}'     },
               { name: 'modules/security_groups', init: '${{ steps.init-sg.outcome }}',      validate: '${{ steps.validate-sg.outcome }}'      },
-              { name: 'modules/alb',             init: '${{ steps.init-alb.outcome }}',     validate '${{ steps.validate-alb.outcome }}'     },
+              { name: 'modules/alb',             init: '${{ steps.init-alb.outcome }}',     validate: '${{ steps.validate-alb.outcome }}'     },
               { name: 'modules/iam',             init: '${{ steps.init-iam.outcome }}',     validate: '${{ steps.validate-iam.outcome }}'     },
               { name: 'modules/compute',         init: '${{ steps.init-compute.outcome }}', validate: '${{ steps.validate-compute.outcome }}' },
               { name: 'modules/rds',             init: '${{ steps.init-rds.outcome }}',     validate: '${{ steps.validate-rds.outcome }}'     },
             ];
-            const  = o => o === 'success' ? '✅' : o === 'skipped' ? '⏭️' : '❌';
-            const rows  = modules.map(m =>
-              | ${m.name} | ${icon(m.init)} \${m.init}\ | ${icon(m.validate)} \${m.validate}\ |
-            ).join('\n');
+            const icon  = o => o === 'success' ? '✅' : o === 'skipped' ? '⏭️' : '❌';
+            const rows  = modules.map(m => `| ${m.name} | ${icon(m.init)} \`${m.init}\` | ${icon(m.validate)} \`${m.validate}\` |`).join('\n');
             const allOk = modules.every(m => m.validate === 'success');
             const body = [
-              ## ${allOk ? '✅' : '❌'} Stage 5 — Terraform Validate — ${allOk ? 'ALL PASSED' : 'FAILURES DETECTED'},
-              '',
-              **Mode:** \-backend=fa\ (zero AWS credentials required),
-              **Terraform Version:** \${{ env.TF_VERSION }}\,
-              **Commit:** \${{ github.sha }}\,
-              '',
+              `## ${allOk ? '✅' : '❌'} Stage 5 — Terraform Validate — ${allOk ? 'ALL PASSED' : 'FAILURES DETECTED'}`,
+              `**Terraform Version:** \`${{ env.TF_VERSION }}\``,
               '| Module | Init | Validate |',
-              '|--------|------|----------|',
-              rows,
-              '',
-              '---',
-              '*Automated validation by Enterprise DevSecOps Pipeline*'
+              '|---|---|---|',
+              rows
             ].join('\n');
-
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner:        context.repo.owner,
@@ -963,29 +413,6 @@ jobs:
       - name: "🏆 Pipeline Final Summary"
         if: always()
         run: |
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║    🏆 ENTERPRISE DEVSECOPS PIPELINE — COMPLETE       ║"
-          echo "══════════════════════════════════════════════════════╝"
-          echo ""
-          echo "  Stage 1 — Checkout & Cache         : ✅ Complete"
-          echo "  Stage 2 — Terraform Format Check   : ✅ Complete"
-          echo "  Stage 3 — Trivy Security Scan      : ✅ Complete"
-          echo "  Stage 4 — TFLint Linting           : ✅ Complete"
-          echo "  Stage 5 — Terraform Valdate       : ✅ Complete"
-          echo ""
-          echo "  Validation Mode   : Static (-backend=false)"
-          echo "  AWS Credentials   : NOT REQUIRED"
-          echo "  GitHub Runner     : ubuntu-latest (FREE)"
-          echo ""
-          echo "  Repository        : ${{ github.repository }}"
-          echo "  Branch            : ${{ github.ref_name }}"
-          echo "  Commit            : ${{ github.sha }}"
-          echo "  Pipeline Run ID   : ${{ github.run_id }}"
-          echo "  Completed At     : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo ""
-          echo "  ► Security Findings: GitHub → Security → Code Scanning"
-          echo "  ► Full Logs       : GitHub → Actions → This Run"
-          echo ""
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║    INFRASTRUCTURE VALIDATED — READY FOR REVIEW       ║"
-          echo "╚══════════════════════════════════════════════════════╝"
+          echo "======================================================="
+          echo "   🏆 ENTERPRISE DEVSECOPS PIPELINE — COMPLETE       "
+          echo "======================================================="
