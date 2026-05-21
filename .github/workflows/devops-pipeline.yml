@@ -1,11 +1,5 @@
-name: "🏗️ Enterprise DevSecOps Pipeline — AWS 3-Tier IaC"
+name: Enterprise DevSecOps Pipeline - AWS 3-Tier IaC
 
-########################################################################
-# TRIGGER CONFIGURATION
-# Runs on every push and every pull request targeting main/master.
-# path-filter ensures the pipeline only runs when infrastructure
-# files actually change — not on README-only updates.
-########################################################################
 on:
   push:
     branches:
