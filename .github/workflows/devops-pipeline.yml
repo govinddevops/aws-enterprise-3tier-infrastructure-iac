@@ -1,7 +1,3 @@
-name: DevSecOps-Pipeline
-on:
-  push:
-    branches: [ "main" ]
 ########################################################################
 # FILE         : .github/workflows/devops-pipeline.yml
 # DESCRIPTION  : Enterprise-Grade DevSecOps CI/CD Pipeline — Static
