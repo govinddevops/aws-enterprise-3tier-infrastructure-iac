@@ -1,0 +1,22 @@
+# ════════════════════════════════════════════════════════════════
+# FILE         : .trivyignore
+# DESCRIPTION  : Documents intentional Trivy scan exceptions.
+#                Every exception has a documented justification.
+#                Review this file quarterly.
+# ════════════════════════════════════════════════════════════════
+
+# AVD-AWS-0104 — Security group allows egress to 0.0.0.0/0
+# Justification: EC2 instances require outbound internet access for
+# OS security patches via NAT Gateway. Inbound access is strictly
+# controlled via SG-to-SG referencing (not CIDR blocks).
+# AVD-AWS-0104
+
+# AVD-AWS-0178 — ALB does not drop invalid headers
+# Justification: HTTP-only listener for Free Tier demonstration.
+# Production upgrade path: HTTPS listener with ACM certificate.
+# AVD-AWS-0178
+
+# AVD-AWS-0053 — RDS publicly accessible
+# Justification: publicly_accessible = false is set explicitly.
+# This finding is a false positive — verify in modules/rds/main.tf.
+# AVD-AWS-0053
