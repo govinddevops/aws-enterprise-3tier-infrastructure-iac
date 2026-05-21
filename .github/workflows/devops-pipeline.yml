@@ -1,3 +1,4 @@
+name: DevSecOps CI Pipeline
 ########################################################################
 # FILE         : .github/workflows/devops-pipeline.yml
 # DESCRIPTION  : Enterprise-Grade DevSecOps CI/CD Pipeline — Static
