@@ -41,18 +41,18 @@ aws_secondary_region = "us-east-1"
 vpc_cidr = "10.0.0.0/16"
 
 public_subnet_cidrs = [
-  "10.0.1.0/24",   # AZ: ap-south-1a — Public Tier
-  "10.0.2.0/24"    # AZ: ap-south-1b — Public Tier
+  "10.0.1.0/24", # AZ: ap-south-1a — Public Tier
+  "10.0.2.0/24"  # AZ: ap-south-1b — Public Tier
 ]
 
 private_subnet_cidrs = [
-  "10.0.10.0/24",  # AZ: ap-south-1a — Application Tier
-  "10.0.11.0/24"   # AZ: ap-south-1b — Application Tier
+  "10.0.10.0/24", # AZ: ap-south-1a — Application Tier
+  "10.0.11.0/24"  # AZ: ap-south-1b — Application Tier
 ]
 
 database_subnet_cidrs = [
-  "10.0.20.0/24",  # AZ: ap-south-1a — Database Tier
-  "10.0.21.0/24"   # AZ: ap-south-1b — Database Tier
+  "10.0.20.0/24", # AZ: ap-south-1a — Database Tier
+  "10.0.21.0/24"  # AZ: ap-south-1b — Database Tier
 ]
 
 availability_zones = [
@@ -121,8 +121,8 @@ db_multi_az = false
 
 # Safety controls
 # In real production: deletion_protection = true, skip_final_snapshot = false
-db_deletion_protection  = false
-db_skip_final_snapshot  = true
+db_deletion_protection = false
+db_skip_final_snapshot = true
 
 ################################################################################
 # SECTION 6: LOAD BALANCER

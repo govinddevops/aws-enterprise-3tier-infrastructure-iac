@@ -245,7 +245,7 @@ resource "aws_iam_policy" "cloudwatch_access" {
 resource "aws_iam_role_policy_attachment" "ssm_access" {
   count = var.enable_ssm_access ? 1 : 0
 
-  role       = aws_iam_role.ec2_role.name
+  role = aws_iam_role.ec2_role.name
   # AWS managed policy — no custom policy needed for SSM core functionality
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }

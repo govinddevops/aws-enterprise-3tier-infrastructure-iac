@@ -197,9 +197,9 @@ resource "aws_db_instance" "main" {
   # gp3 is not Free Tier eligible for RDS (unlike EC2 EBS where gp3 is free).
   # storage_encrypted = true — AES-256 encryption at rest — mandatory.
   ##############################################################################
-  allocated_storage     = var.db_allocated_storage
-  storage_type          = "gp2"
-  storage_encrypted     = true
+  allocated_storage = var.db_allocated_storage
+  storage_type      = "gp2"
+  storage_encrypted = true
 
   ##############################################################################
   # CREDENTIALS

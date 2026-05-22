@@ -160,12 +160,12 @@ output "ec2_iam_role_arn" {
 output "deployment_summary" {
   description = "Complete deployment summary. Run 'terraform output deployment_summary' for a structured overview of all critical endpoints and identifiers."
   value = {
-    project          = var.project_name
-    environment      = var.environment
-    region           = var.aws_region
-    application_url  = "http://${module.alb.alb_dns_name}"
-    vpc_id           = module.vpc.vpc_id
-    asg_name         = module.compute.autoscaling_group_name
-    rds_instance     = module.rds.db_instance_id
+    project         = var.project_name
+    environment     = var.environment
+    region          = var.aws_region
+    application_url = "http://${module.alb.alb_dns_name}"
+    vpc_id          = module.vpc.vpc_id
+    asg_name        = module.compute.autoscaling_group_name
+    rds_instance    = module.rds.db_instance_id
   }
 }

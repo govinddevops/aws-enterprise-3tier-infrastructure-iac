@@ -190,7 +190,7 @@ resource "aws_dynamodb_table" "terraform_state_lock" {
 
   attribute {
     name = "LockID"
-    type = "S"  # S = String type
+    type = "S" # S = String type
   }
 
   # Enable point-in-time recovery for the lock table itself

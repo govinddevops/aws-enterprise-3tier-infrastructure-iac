@@ -235,8 +235,8 @@ module "rds" {
   common_tags = local.common_tags
 
   # Network placement — database subnets from VPC module
-  db_subnet_group_name   = module.vpc.db_subnet_group_name
-  db_security_group_id   = module.security_groups.db_sg_id
+  db_subnet_group_name = module.vpc.db_subnet_group_name
+  db_security_group_id = module.security_groups.db_sg_id
 
   # Database configuration
   db_engine              = var.db_engine

@@ -83,10 +83,10 @@ single_nat_gateway = true
 # desired = min = 1 means ASG always runs exactly 1 instance.
 ################################################################################
 
-instance_type        = "t2.micro"
-ami_id               = ""
-key_pair_name        = "enterprise-key"
-root_volume_size     = 15
+instance_type    = "t2.micro"
+ami_id           = ""
+key_pair_name    = "enterprise-key"
+root_volume_size = 15
 
 asg_min_size         = 1
 asg_max_size         = 2
@@ -110,15 +110,15 @@ db_instance_class = "db.t3.micro"
 db_name           = "enterprisedb"
 db_username       = "dbadmin"
 
-db_allocated_storage    = 20
+db_allocated_storage     = 20
 db_max_allocated_storage = 0
 
-db_multi_az               = false
+db_multi_az                = false
 db_backup_retention_period = 1
-db_backup_window          = "03:00-04:00"
-db_maintenance_window     = "Mon:04:00-Mon:05:00"
-db_deletion_protection    = false
-db_skip_final_snapshot    = true
+db_backup_window           = "03:00-04:00"
+db_maintenance_window      = "Mon:04:00-Mon:05:00"
+db_deletion_protection     = false
+db_skip_final_snapshot     = true
 
 db_performance_insights_enabled = true
 db_monitoring_interval          = 0

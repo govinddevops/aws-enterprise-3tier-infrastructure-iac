@@ -91,10 +91,10 @@ single_nat_gateway = true
 # Conservative CPU thresholds — scale out late, scale in very late.
 ################################################################################
 
-instance_type        = "t2.micro"
-ami_id               = ""
-key_pair_name        = "enterprise-key"
-root_volume_size     = 15
+instance_type    = "t2.micro"
+ami_id           = ""
+key_pair_name    = "enterprise-key"
+root_volume_size = 15
 
 asg_min_size         = 1
 asg_max_size         = 2
