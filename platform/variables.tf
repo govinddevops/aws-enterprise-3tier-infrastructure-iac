@@ -33,10 +33,10 @@ variable "platform_namespaces" {
   description = "List of Kubernetes namespaces to create on the cluster. Each namespace represents a clean boundary for a platform concern — platform tooling, applications, security, and observability."
   type        = list(string)
   default = [
-    "platform",      # ArgoCD, Ingress controller, platform tooling
-    "apps",          # FinTech microservice applications
-    "security",      # Secrets management, policy engines (future)
-    "observability"  # Prometheus, Grafana, logging stack (future)
+    "platform",     # ArgoCD, Ingress controller, platform tooling
+    "apps",         # FinTech microservice applications
+    "security",     # Secrets management, policy engines (future)
+    "observability" # Prometheus, Grafana, logging stack (future)
   ]
 }
 

@@ -54,8 +54,8 @@ resource "kubernetes_namespace" "platform_namespaces" {
     name = each.key
 
     labels = merge(local.common_labels, {
-      "name"                         = each.key
-      "platform.fintech/namespace"   = each.key
+      "name"                       = each.key
+      "platform.fintech/namespace" = each.key
     })
 
     annotations = {
@@ -91,9 +91,9 @@ resource "kubernetes_namespace" "argocd" {
     name = var.argocd_namespace
 
     labels = merge(local.common_labels, {
-      "name"                        = var.argocd_namespace
-      "platform.fintech/namespace"  = var.argocd_namespace
-      "platform.fintech/component"  = "gitops-controller"
+      "name"                       = var.argocd_namespace
+      "platform.fintech/namespace" = var.argocd_namespace
+      "platform.fintech/component" = "gitops-controller"
     })
 
     annotations = {
@@ -145,9 +145,9 @@ resource "helm_release" "argocd" {
   # This gives Terraform full lifecycle control over the namespace
 
   # Wait for all ArgoCD pods to be Running before marking apply complete
-  wait             = true
-  wait_for_jobs    = true
-  timeout          = 600
+  wait          = true
+  wait_for_jobs = true
+  timeout       = 600
   # 10 minute timeout — generous for first-time chart pull on slow connections
 
   # Render Helm values inline using heredoc YAML
@@ -174,11 +174,11 @@ resource "helm_release" "argocd" {
         insecure = var.argocd_server_insecure
 
         ingress = {
-          enabled = var.argocd_ingress_enabled
+          enabled          = var.argocd_ingress_enabled
           ingressClassName = "nginx"
-          hosts = [var.argocd_ingress_host]
-          paths = ["/"]
-          pathType = "Prefix"
+          hosts            = [var.argocd_ingress_host]
+          paths            = ["/"]
+          pathType         = "Prefix"
           annotations = {
             "nginx.ingress.kubernetes.io/force-ssl-redirect" = "false"
             "nginx.ingress.kubernetes.io/backend-protocol"   = "HTTP"
@@ -208,9 +208,9 @@ resource "helm_release" "argocd" {
         # ArgoCD application controller concurrency
         # Lower values = less CPU pressure on local K3d nodes
         cm = {
-          "application.instanceLabelKey"             = "app.kubernetes.io/instance"
-          "server.rbac.log.enforce.enable"           = "false"
-          "timeout.reconciliation"                   = "180s"
+          "application.instanceLabelKey"   = "app.kubernetes.io/instance"
+          "server.rbac.log.enforce.enable" = "false"
+          "timeout.reconciliation"         = "180s"
         }
       }
 
@@ -219,7 +219,7 @@ resource "helm_release" "argocd" {
         replicas = 1
         resources = {
           limits   = { cpu = "250m", memory = "128Mi" }
-          requests = { cpu = "50m",  memory = "64Mi"  }
+          requests = { cpu = "50m", memory = "64Mi" }
         }
       }
 
@@ -227,7 +227,7 @@ resource "helm_release" "argocd" {
       redis = {
         resources = {
           limits   = { cpu = "200m", memory = "128Mi" }
-          requests = { cpu = "50m",  memory = "64Mi"  }
+          requests = { cpu = "50m", memory = "64Mi" }
         }
       }
 
