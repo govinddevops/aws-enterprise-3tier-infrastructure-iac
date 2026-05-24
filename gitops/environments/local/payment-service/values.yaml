@@ -1,0 +1,55 @@
+################################################################################
+# FILE        : gitops/environments/local/payment-service/values.yaml
+# DESCRIPTION : Environment-specific Helm value overrides for local K3d.
+#
+# PURPOSE:
+#   These values override the defaults in
+#   applications/payment-service/helm-chart/values.yaml
+#   for the local environment specifically.
+#
+#   In production this file would live in a separate
+#   config repository — here we keep it in mono-repo
+#   for simplicity at this stage.
+################################################################################
+
+# Environment identifier
+environment: local
+
+# Image configuration for local K3d
+image:
+  repository: payment-service
+  tag: "1.0.0"
+  # IfNotPresent uses locally loaded K3d image
+  pullPolicy: IfNotPresent
+
+# Single replica — honest local simulation
+replicaCount: 1
+
+# Local-specific resource limits
+# Conservative for K3d node constraints
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Local ingress configuration
+ingress:
+  enabled: true
+  className: nginx
+  host: api.fintech.local
+  path: /
+  pathType: Prefix
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+
+# Local environment variables
+env:
+  APP_ENV: local
+  APP_VERSION: "1.0.0"
+  SERVICE_NAME: payment-service
+
+# Namespace
+namespace: apps

@@ -1,0 +1,105 @@
+################################################################################
+# FILE        : gitops/argocd-apps/payment-service-app.yaml
+# DESCRIPTION : ArgoCD Application manifest for payment-service.
+#
+# WHAT THIS DOES:
+#   Tells ArgoCD to watch our Git repository for changes in the
+#   applications/payment-service/helm-chart directory and
+#   automatically sync any changes to the apps namespace on
+#   the local K3d cluster.
+#
+# GITOPS FLOW:
+#   Developer pushes code change
+#     → ArgoCD detects diff between Git and cluster state
+#       → ArgoCD syncs automatically
+#         → New pod rolled out with zero downtime
+#
+# HONEST NOTE:
+#   This runs against local K3d cluster.
+#   In production this would point to EKS cluster endpoint.
+#   The pattern is identical — only the destination changes.
+################################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: payment-service
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: payment-service
+    app.kubernetes.io/managed-by: argocd
+    platform.fintech/layer: applications
+    environment: local
+  # Finalizer ensures ArgoCD cleans up resources when
+  # this Application manifest is deleted from Git
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Which ArgoCD project this app belongs to
+  # default project allows all sources and destinations
+  project: default
+
+  # SOURCE: Where ArgoCD reads the desired state from
+  source:
+    # Your actual GitHub repository URL
+    # ArgoCD will watch this repo for changes
+    repoURL: https://github.com/govinddevops/aws-enterprise-3tier-infrastructure-iac.git
+    # Branch to watch
+    targetRevision: main
+    # Path inside the repo containing the Helm chart
+    path: applications/payment-service/helm-chart
+    # Helm-specific source configuration
+    helm:
+      # Values file to use from the repo
+      valueFiles:
+        - values.yaml
+      # Additional value overrides for this environment
+      parameters:
+        - name: environment
+          value: local
+        - name: image.tag
+          value: "1.0.0"
+
+  # DESTINATION: Where ArgoCD deploys to
+  destination:
+    # kubernetes.default.svc = the cluster ArgoCD itself runs in
+    # This is correct for local K3d — ArgoCD deploys to same cluster
+    server: https://kubernetes.default.svc
+    namespace: apps
+
+  # SYNC POLICY: How ArgoCD handles synchronisation
+  syncPolicy:
+    # automated: ArgoCD syncs without manual approval
+    # In production you might disable this for production environments
+    # and require manual sync for safety
+    automated:
+      # prune: delete resources from cluster that are removed from Git
+      prune: true
+      # selfHeal: if someone manually changes cluster state,
+      # ArgoCD corrects it back to match Git — Git is truth
+      selfHeal: true
+      # allowEmpty: do not sync if source produces empty manifests
+      allowEmpty: false
+    syncOptions:
+      # Create namespace if it does not exist
+      - CreateNamespace=true
+      # Use server-side apply for better conflict handling
+      - ServerSideApply=false
+      # Validate manifests before applying
+      - Validate=true
+    # Retry on failure — important for network blips
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  # HEALTH CHECK configuration
+  # ArgoCD uses these to determine if deployment is healthy
+  ignoreDifferences:
+    # Ignore last-applied-configuration annotation diffs
+    # These are added by kubectl and cause false OutOfSync status
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/template/metadata/annotations

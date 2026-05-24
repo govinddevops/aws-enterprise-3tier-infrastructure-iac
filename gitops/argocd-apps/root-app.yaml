@@ -1,0 +1,65 @@
+################################################################################
+# FILE        : gitops/argocd-apps/root-app.yaml
+# DESCRIPTION : ArgoCD App of Apps pattern — the root application.
+#
+# APP OF APPS PATTERN EXPLAINED:
+#   Instead of manually applying each ArgoCD Application manifest,
+#   we create ONE root Application that watches the gitops/argocd-apps/
+#   directory. When we add a new app manifest there, ArgoCD automatically
+#   picks it up and deploys it.
+#
+# BENEFITS:
+#   - Single source of truth for all applications
+#   - Adding a new service = add one YAML file to gitops/argocd-apps/
+#   - ArgoCD manages ArgoCD Applications — fully self-managing
+#   - Standard enterprise GitOps pattern used by Argo Project docs
+#
+# HOW TO BOOTSTRAP:
+#   kubectl apply -f gitops/argocd-apps/root-app.yaml
+#   After this — ArgoCD manages everything else automatically
+################################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: root-app
+    app.kubernetes.io/managed-by: argocd
+    platform.fintech/layer: gitops
+    environment: local
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/govinddevops/aws-enterprise-3tier-infrastructure-iac.git
+    targetRevision: main
+    # Watch this directory for Application manifests
+    path: gitops/argocd-apps
+    # Directory source — not Helm, just plain YAML files
+    directory:
+      recurse: false
+      include: "*.yaml"
+      exclude: "root-app.yaml"
+
+  destination:
+    server: https://kubernetes.default.svc
+    # ArgoCD Applications live in argocd namespace
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - Validate=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
