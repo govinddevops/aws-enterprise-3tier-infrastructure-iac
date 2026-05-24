@@ -1,0 +1,14 @@
+# ── PRODUCTION DEPENDENCIES ────────────────────────────────────────────────
+# All versions pinned — no floating dependencies in production containers
+
+# Web framework — async, high performance, OpenAPI auto-docs
+fastapi==0.111.0
+
+# ASGI server — production grade
+uvicorn[standard]==0.30.1
+
+# Data validation — FastAPI depends on this
+pydantic==2.7.1
+
+# HTTP client — for downstream service calls in future phases
+httpx==0.27.0

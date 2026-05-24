@@ -1,0 +1,102 @@
+################################################################################
+# FILE        : applications/payment-service/helm-chart/values.yaml
+# DESCRIPTION : Default Helm values for local K3d deployment.
+#               All values overridable at deploy time:
+#               helm install payment-service ./helm-chart \
+#                 --set image.tag=2.0.0
+################################################################################
+
+# ── IMAGE ─────────────────────────────────────────────────────────────────────
+image:
+  # Empty repository = uses local Docker image loaded into K3d
+  repository: payment-service
+  # Pinned tag — never use latest in Helm charts
+  tag: "1.0.0"
+  # IfNotPresent = use local image if it exists
+  # Correct for K3d local development workflow
+  pullPolicy: IfNotPresent
+
+# ── REPLICA COUNT ─────────────────────────────────────────────────────────────
+# Single replica for local K3d — honest about local-first simulation
+replicaCount: 1
+
+image:
+  repository: payment-service
+  tag: 1.0.0
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: nginx
+  host: api.fintech.local
+  path: /
+  pathType: Prefix
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+
+# ── ENVIRONMENT ───────────────────────────────────────────────────────────────
+environment: local
+
+# ── APPLICATION ENVIRONMENT VARIABLES ────────────────────────────────────────
+env:
+  APP_ENV: local
+  APP_VERSION: "1.0.0"
+  SERVICE_NAME: payment-service
+
+# ── RESOURCE LIMITS ───────────────────────────────────────────────────────────
+# Conservative limits for K3d local nodes
+# Prevents one service starving other platform components
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# ── KUBERNETES PROBES ─────────────────────────────────────────────────────────
+# Liveness: restart container if unhealthy
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Readiness: remove from load balancer if not ready
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# ── SECURITY CONTEXT ──────────────────────────────────────────────────────────
+# Mirrors the non-root user created in the Dockerfile
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ── NAMESPACE ─────────────────────────────────────────────────────────────────
+namespace: apps
+
+# ── NAME OVERRIDES ────────────────────────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

@@ -257,3 +257,113 @@ hosts-setup:
 		echo "$(GREEN)✅ Local DNS entries added$(RESET)" || \
 		echo "$(YELLOW)Entries already exist in /etc/hosts$(RESET)"
 	@cat /etc/hosts | grep "fintech.local"
+
+# ── PHASE 2: APPLICATION BUILD AND DEPLOY ────────────────────────────────────
+
+APP_NAME       := payment-service
+APP_VERSION    := 1.0.0
+APP_DIR        := applications/payment-service
+HELM_CHART_DIR := $(APP_DIR)/helm-chart
+
+docker-build:
+	@echo "$(BLUE)Building Docker image: $(APP_NAME):$(APP_VERSION)$(RESET)"
+	@docker build \
+		--build-arg APP_VERSION=$(APP_VERSION) \
+		--build-arg BUILD_DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
+		--build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD) \
+		-t $(APP_NAME):$(APP_VERSION) \
+		$(APP_DIR)
+	@echo "$(GREEN)✅ Docker image built: $(APP_NAME):$(APP_VERSION)$(RESET)"
+	@echo ""
+	@docker images | grep $(APP_NAME)
+
+docker-run:
+	@echo "$(BLUE)Running $(APP_NAME) locally on port 8000$(RESET)"
+	@echo "$(YELLOW)Press CTRL+C to stop$(RESET)"
+	@docker run --rm \
+		-p 8000:8000 \
+		-e APP_ENV=local \
+		-e APP_VERSION=$(APP_VERSION) \
+		-e SERVICE_NAME=$(APP_NAME) \
+		$(APP_NAME):$(APP_VERSION)
+
+k3d-image-load:
+	@echo "$(BLUE)Loading Docker image into K3d cluster: $(CLUSTER_NAME)$(RESET)"
+	@k3d image import $(APP_NAME):$(APP_VERSION) \
+		--cluster $(CLUSTER_NAME)
+	@echo "$(GREEN)✅ Image loaded into K3d cluster$(RESET)"
+
+nginx-install:
+	@echo "$(BLUE)Installing NGINX Ingress Controller$(RESET)"
+	@$(HELM) repo add ingress-nginx \
+		https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
+	@$(HELM) repo update
+	@$(HELM) upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+		--namespace platform \
+		--create-namespace \
+		--set controller.replicaCount=1 \
+		--set controller.resources.requests.cpu=50m \
+		--set controller.resources.requests.memory=64Mi \
+		--set controller.admissionWebhooks.enabled=false \
+		--timeout 120s || true
+	@echo "$(YELLOW)Waiting 15s for NGINX pod to start...$(RESET)"
+	@sleep 15
+	@$(KUBECTL) get pods -n platform
+	@echo "$(GREEN)✅ NGINX Ingress Controller installed$(RESET)"
+	@echo "$(YELLOW)Note: EXTERNAL-IP pending is normal on WSL K3d$(RESET)"
+
+app-deploy:
+	@echo "$(BLUE)Deploying $(APP_NAME) via Helm into apps namespace$(RESET)"
+	@$(KUBECTL) cluster-info > /dev/null 2>&1 || \
+		(echo "$(RED)❌ Cluster not accessible. Run make cluster-up first$(RESET)" && exit 1)
+	@$(HELM) upgrade --install $(APP_NAME) $(HELM_CHART_DIR) \
+		--namespace apps \
+		--create-namespace \
+		--set image.tag=$(APP_VERSION) \
+		--set environment=local \
+		--timeout 120s
+	@sleep 10
+	@echo ""
+	@echo "$(GREEN)✅ $(APP_NAME) deployed$(RESET)"
+	@echo ""
+	@$(KUBECTL) get pods,svc,ingress -n apps
+	@echo ""
+	@echo "$(GREEN)Test: kubectl port-forward svc/payment-service 8001:80 -n apps$(RESET)"
+	@echo "$(GREEN)Then: curl http://localhost:8001/health$(RESET)"
+
+app-status:
+	@echo "$(BLUE)Application Status — apps namespace$(RESET)"
+	@echo ""
+	@$(KUBECTL) get pods,svc,ingress -n apps -o wide
+
+app-logs:
+	@echo "$(BLUE)Streaming logs — $(APP_NAME)$(RESET)"
+	@echo "$(YELLOW)Press CTRL+C to stop$(RESET)"
+	@$(KUBECTL) logs \
+		-l app.kubernetes.io/name=$(APP_NAME) \
+		-n apps \
+		--follow \
+		--tail=50
+
+app-test:
+	@echo "$(BLUE)Testing $(APP_NAME) via port-forward$(RESET)"
+	@echo "$(YELLOW)Starting port-forward on localhost:8001$(RESET)"
+	@$(KUBECTL) port-forward svc/$(APP_NAME) 8001:80 -n apps &
+	@sleep 3
+	@echo ""
+	@echo "Health check:"
+	@curl -s http://localhost:8001/health | python3 -m json.tool
+	@echo ""
+	@echo "Readiness check:"
+	@curl -s http://localhost:8001/ready | python3 -m json.tool
+	@echo ""
+	@echo "Root endpoint:"
+	@curl -s http://localhost:8001/ | python3 -m json.tool
+	@echo ""
+	@echo "$(GREEN)✅ All endpoints responding$(RESET)"
+	@echo "$(YELLOW)Docs available at: http://localhost:8001/docs$(RESET)"
+
+app-delete:
+	@echo "$(YELLOW)Removing $(APP_NAME) from cluster$(RESET)"
+	@$(HELM) uninstall $(APP_NAME) --namespace apps 2>/dev/null || true
+	@echo "$(GREEN)✅ $(APP_NAME) removed$(RESET)"
