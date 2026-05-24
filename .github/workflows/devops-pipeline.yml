@@ -3,11 +3,22 @@
 # DESCRIPTION  : Enterprise-Grade DevSecOps CI/CD Pipeline
 #                Static Check Mode — Zero AWS credentials required.
 #
-# FIXES APPLIED:
-#   1. Plugin cache dir created at workflow level before all jobs
-#   2. TF_PLUGIN_CACHE_DIR points to runner home (not workspace)
-#      so it persists correctly across all jobs
-#   3. Cache mkdir step added inside every job that uses Terraform
+# MONO-REPO STRUCTURE AWARE:
+#   All Terraform paths updated for 4-boundary mono-repo:
+#   infrastructure/ — AWS Terraform (root + 6 modules)
+#   platform/       — Kubernetes + Helm bootstrap
+#   applications/   — FinTech microservices (non-Terraform)
+#   gitops/         — ArgoCD manifests (non-Terraform)
+#
+# PIPELINE STAGES:
+#   1. Secure Checkout & Terraform Plugin Cache
+#   2. Terraform Format Check (recursive)
+#   3. Aqua Security Trivy — Static IaC Security Scan
+#   4. TFLint — Enterprise Linting (all modules)
+#   5. Terraform Validate (infrastructure/ + all modules + platform/)
+#
+# RUNNERS      : GitHub-hosted ubuntu-latest (100% FREE)
+# CREDENTIALS  : NONE REQUIRED — pure static analysis
 #
 # AUTHOR       : DevOps Platform Engineering Team
 # REPOSITORY   : aws-enterprise-3tier-infrastructure-iac
@@ -37,8 +48,6 @@ on:
 
 ########################################################################
 # GLOBAL ENVIRONMENT VARIABLES
-# TF_PLUGIN_CACHE_DIR uses runner home (~/) not workspace
-# Workspace path changes per run — home path is stable across jobs
 ########################################################################
 env:
   TF_VERSION: "1.6.6"
@@ -47,16 +56,25 @@ env:
   TF_CLI_ARGS: "-no-color"
   TF_PLUGIN_CACHE_DIR: "/home/runner/.terraform.d/plugin-cache"
 
+########################################################################
+# PERMISSIONS — Principle of Least Privilege
+########################################################################
 permissions:
   contents: read
   pull-requests: write
   security-events: write
   actions: read
 
+########################################################################
+# CONCURRENCY — Cancel stale runs on new push
+########################################################################
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
+########################################################################
+# JOBS
+########################################################################
 jobs:
 
   ##########################################################################
@@ -87,6 +105,13 @@ jobs:
           echo "  Runner OS    : ${{ runner.os }}"
           echo "  Timestamp    : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "========================================================"
+          echo ""
+          echo "  MONO-REPO BOUNDARY STATUS:"
+          echo "  infrastructure/ : $(find infrastructure -name '*.tf' | wc -l) .tf files"
+          echo "  platform/       : $(find platform -name '*.tf' 2>/dev/null | wc -l) .tf files"
+          echo "  applications/   : $(find applications -type f 2>/dev/null | wc -l) files"
+          echo "  gitops/         : $(find gitops -type f 2>/dev/null | wc -l) files"
+          echo "========================================================"
 
       - name: "🔧 Setup Terraform CLI — v${{ env.TF_VERSION }}"
         uses: hashicorp/setup-terraform@v3
@@ -97,7 +122,7 @@ jobs:
       - name: "📁 Create Terraform Plugin Cache Directory"
         run: |
           mkdir -p /home/runner/.terraform.d/plugin-cache
-          echo "Plugin cache directory created: /home/runner/.terraform.d/plugin-cache"
+          echo "Plugin cache directory created"
 
       - name: "⚡ Cache Terraform Provider Plugins"
         uses: actions/cache@v4
@@ -117,7 +142,7 @@ jobs:
       - name: "📊 Repository Infrastructure Audit"
         run: |
           echo "========================================================"
-          echo "  REPOSITORY STRUCTURE AUDIT"
+          echo "  TERRAFORM FILES DISCOVERED"
           echo "========================================================"
           find . -type f -name "*.tf" \
             | grep -v ".terraform/" \
@@ -128,9 +153,7 @@ jobs:
               done
           echo ""
           TF_COUNT=$(find . -name "*.tf" | grep -v ".terraform/" | wc -l)
-          MOD_COUNT=$(find ./modules -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
           echo "  Total .tf files : ${TF_COUNT}"
-          echo "  Custom modules  : ${MOD_COUNT}"
           echo "========================================================"
 
   ##########################################################################
@@ -155,8 +178,6 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # CRITICAL FIX: Create cache dir before terraform runs
-      # Without this, terraform fmt fails with "cannot be opened" error
       - name: "📁 Create Plugin Cache Directory"
         run: mkdir -p /home/runner/.terraform.d/plugin-cache
 
@@ -169,7 +190,6 @@ jobs:
           echo "Command : terraform fmt -check -recursive -diff ."
           echo "Scope   : All .tf files in repository (recursive)"
           echo ""
-
           if terraform fmt -check -recursive -diff .; then
             echo "========================================================"
             echo "✅ FORMAT CHECK PASSED"
@@ -250,6 +270,7 @@ jobs:
           echo "  Scanners    : misconfiguration + secret"
           echo "  Severities  : CRITICAL, HIGH, MEDIUM, LOW"
           echo "  Mode        : 100% Offline — Zero AWS credentials"
+          echo "  Scope       : Entire repository (all boundaries)"
           echo "========================================================"
 
       - name: "🛡️ Trivy Scan — SARIF Output"
@@ -310,6 +331,7 @@ jobs:
 
   ##########################################################################
   # STAGE 4: TFLINT — ENTERPRISE LINTING
+  # All paths updated for mono-repo infrastructure/ boundary
   ##########################################################################
   stage-4-tflint-analysis:
     name: "🔍 Stage 4 — TFLint Enterprise Linting"
@@ -343,81 +365,116 @@ jobs:
           tflint --init --config=.tflint.hcl
           echo "TFLint version : $(tflint --version)"
 
-      - name: "🔍 TFLint — Root Module"
+      - name: "🔍 TFLint — infrastructure/ (Root Module)"
         id: lint-root
         run: |
           echo "========================================================"
-          echo "  TFLINT — ROOT MODULE"
+          echo "  TFLINT — infrastructure/ (Root Module)"
           echo "========================================================"
-          tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="." \
-            && echo "✅ ROOT MODULE — LINT PASSED" \
-            || { echo "⚠️  ROOT MODULE — VIOLATIONS FOUND"; true; }
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="infrastructure" \
+            && echo "✅ INFRASTRUCTURE ROOT — LINT PASSED" \
+            || { echo "⚠️  INFRASTRUCTURE ROOT — VIOLATIONS FOUND"; true; }
           echo "========================================================"
 
-      - name: "🔍 TFLint — modules/vpc"
+      - name: "🔍 TFLint — infrastructure/modules/vpc"
         id: lint-vpc
         run: |
           echo "========================================================"
-          echo "  TFLINT — modules/vpc"
+          echo "  TFLINT — infrastructure/modules/vpc"
           echo "========================================================"
-          tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/vpc" \
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="infrastructure/modules/vpc" \
             && echo "✅ VPC MODULE — LINT PASSED" \
             || { echo "⚠️  VPC MODULE — VIOLATIONS FOUND"; true; }
           echo "========================================================"
 
-      - name: "🔍 TFLint — modules/security_groups"
+      - name: "🔍 TFLint — infrastructure/modules/security_groups"
         id: lint-sg
         run: |
           echo "========================================================"
-          echo "  TFLINT — modules/security_groups"
+          echo "  TFLINT — infrastructure/modules/security_groups"
           echo "========================================================"
-          tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/security_groups" \
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="infrastructure/modules/security_groups" \
             && echo "✅ SECURITY GROUPS — LINT PASSED" \
             || { echo "⚠️  SECURITY GROUPS — VIOLATIONS FOUND"; true; }
           echo "========================================================"
 
-      - name: "🔍 TFLint — modules/alb"
+      - name: "🔍 TFLint — infrastructure/modules/alb"
         id: lint-alb
         run: |
           echo "========================================================"
-          echo "  TFLINT — modules/alb"
+          echo "  TFLINT — infrastructure/modules/alb"
           echo "========================================================"
-          tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/alb" \
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="infrastructure/modules/alb" \
             && echo "✅ ALB MODULE — LINT PASSED" \
             || { echo "⚠️  ALB MODULE — VIOLATIONS FOUND"; true; }
           echo "========================================================"
 
-      - name: "🔍 TFLint — modules/iam"
+      - name: "🔍 TFLint — infrastructure/modules/iam"
         id: lint-iam
         run: |
           echo "========================================================"
-          echo "  TFLINT — modules/iam"
+          echo "  TFLINT — infrastructure/modules/iam"
           echo "========================================================"
-          tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/iam" \
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="infrastructure/modules/iam" \
             && echo "✅ IAM MODULE — LINT PASSED" \
             || { echo "⚠️  IAM MODULE — VIOLATIONS FOUND"; true; }
           echo "========================================================"
 
-      - name: "🔍 TFLint — modules/compute"
+      - name: "🔍 TFLint — infrastructure/modules/compute"
         id: lint-compute
         run: |
           echo "========================================================"
-          echo "  TFLINT — modules/compute"
+          echo "  TFLINT — infrastructure/modules/compute"
           echo "========================================================"
-          tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/compute" \
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="infrastructure/modules/compute" \
             && echo "✅ COMPUTE MODULE — LINT PASSED" \
             || { echo "⚠️  COMPUTE MODULE — VIOLATIONS FOUND"; true; }
           echo "========================================================"
 
-      - name: "🔍 TFLint — modules/rds"
+      - name: "🔍 TFLint — infrastructure/modules/rds"
         id: lint-rds
         run: |
           echo "========================================================"
-          echo "  TFLINT — modules/rds"
+          echo "  TFLINT — infrastructure/modules/rds"
           echo "========================================================"
-          tflint --config="$(pwd)/.tflint.hcl" --format=compact --chdir="modules/rds" \
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="infrastructure/modules/rds" \
             && echo "✅ RDS MODULE — LINT PASSED" \
             || { echo "⚠️  RDS MODULE — VIOLATIONS FOUND"; true; }
+          echo "========================================================"
+
+      - name: "🔍 TFLint — platform/"
+        id: lint-platform
+        run: |
+          echo "========================================================"
+          echo "  TFLINT — platform/"
+          echo "========================================================"
+          tflint \
+            --config="$(pwd)/.tflint.hcl" \
+            --format=compact \
+            --chdir="platform" \
+            && echo "✅ PLATFORM MODULE — LINT PASSED" \
+            || { echo "⚠️  PLATFORM MODULE — VIOLATIONS FOUND"; true; }
           echo "========================================================"
 
       - name: "📊 TFLint Complete Summary"
@@ -426,17 +483,19 @@ jobs:
           echo "========================================================"
           echo "  TFLINT ANALYSIS — COMPLETE SUMMARY"
           echo "========================================================"
-          echo "  Root Module             : ${{ steps.lint-root.outcome }}"
-          echo "  modules/vpc             : ${{ steps.lint-vpc.outcome }}"
-          echo "  modules/security_groups : ${{ steps.lint-sg.outcome }}"
-          echo "  modules/alb             : ${{ steps.lint-alb.outcome }}"
-          echo "  modules/iam             : ${{ steps.lint-iam.outcome }}"
-          echo "  modules/compute         : ${{ steps.lint-compute.outcome }}"
-          echo "  modules/rds             : ${{ steps.lint-rds.outcome }}"
+          echo "  infrastructure/ (root)          : ${{ steps.lint-root.outcome }}"
+          echo "  infrastructure/modules/vpc      : ${{ steps.lint-vpc.outcome }}"
+          echo "  infrastructure/modules/sg       : ${{ steps.lint-sg.outcome }}"
+          echo "  infrastructure/modules/alb      : ${{ steps.lint-alb.outcome }}"
+          echo "  infrastructure/modules/iam      : ${{ steps.lint-iam.outcome }}"
+          echo "  infrastructure/modules/compute  : ${{ steps.lint-compute.outcome }}"
+          echo "  infrastructure/modules/rds      : ${{ steps.lint-rds.outcome }}"
+          echo "  platform/                       : ${{ steps.lint-platform.outcome }}"
           echo "========================================================"
 
   ##########################################################################
   # STAGE 5: TERRAFORM VALIDATE — ALL MODULES
+  # All paths updated for mono-repo infrastructure/ boundary
   ##########################################################################
   stage-5-terraform-validate:
     name: "✅ Stage 5 — Terraform Validate (All Modules)"
@@ -460,7 +519,6 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # CRITICAL FIX: Create cache dir before every terraform operation
       - name: "📁 Create Plugin Cache Directory"
         run: |
           mkdir -p /home/runner/.terraform.d/plugin-cache
@@ -479,137 +537,166 @@ jobs:
             ${{ runner.os }}-terraform-${{ env.TF_VERSION }}-
             ${{ runner.os }}-terraform-
 
-      # ── ROOT MODULE ─────────────────────────────────────────────────────
+      # ── INFRASTRUCTURE ROOT MODULE ─────────────────────────────────────
 
-      - name: "📦 Terraform Init — Root Module"
+      - name: "📦 Terraform Init — infrastructure/ (Root Module)"
         id: init-root
         run: |
           echo "========================================================"
-          echo "  TERRAFORM INIT — ROOT MODULE (-backend=false)"
+          echo "  TERRAFORM INIT — infrastructure/"
+          echo "  -backend=false: no S3 credentials required"
           echo "========================================================"
-          terraform init -backend=false -input=false -no-color
-          echo "✅ Root Module Init — Complete"
+          terraform -chdir=infrastructure init \
+            -backend=false \
+            -input=false \
+            -no-color
+          echo "✅ infrastructure/ Init — Complete"
           echo "========================================================"
 
-      - name: "✅ Terraform Validate — Root Module"
+      - name: "✅ Terraform Validate — infrastructure/ (Root Module)"
         id: validate-root
         run: |
           echo "========================================================"
-          echo "  TERRAFORM VALIDATE — ROOT MODULE"
+          echo "  TERRAFORM VALIDATE — infrastructure/"
           echo "========================================================"
-          terraform validate -no-color
-          echo "✅ ROOT MODULE — VALIDATION PASSED"
+          terraform -chdir=infrastructure validate -no-color
+          echo "✅ INFRASTRUCTURE ROOT — VALIDATION PASSED"
           echo "========================================================"
 
-      # ── VPC MODULE ──────────────────────────────────────────────────────
+      # ── VPC MODULE ────────────────────────────────────────────────────
 
-      - name: "📦 Terraform Init — modules/vpc"
+      - name: "📦 Terraform Init — infrastructure/modules/vpc"
         id: init-vpc
         run: |
-          terraform -chdir=modules/vpc init -backend=false -input=false -no-color
-          echo "✅ modules/vpc — Init Complete"
+          terraform -chdir=infrastructure/modules/vpc init \
+            -backend=false -input=false -no-color
+          echo "✅ infrastructure/modules/vpc — Init Complete"
 
-      - name: "✅ Terraform Validate — modules/vpc"
+      - name: "✅ Terraform Validate — infrastructure/modules/vpc"
         id: validate-vpc
         run: |
           echo "========================================================"
-          echo "  TERRAFORM VALIDATE — modules/vpc"
+          echo "  TERRAFORM VALIDATE — infrastructure/modules/vpc"
           echo "========================================================"
-          terraform -chdir=modules/vpc validate -no-color
+          terraform -chdir=infrastructure/modules/vpc validate -no-color
           echo "✅ VPC MODULE — VALIDATION PASSED"
           echo "========================================================"
 
-      # ── SECURITY GROUPS MODULE ──────────────────────────────────────────
+      # ── SECURITY GROUPS MODULE ────────────────────────────────────────
 
-      - name: "📦 Terraform Init — modules/security_groups"
+      - name: "📦 Terraform Init — infrastructure/modules/security_groups"
         id: init-sg
         run: |
-          terraform -chdir=modules/security_groups init -backend=false -input=false -no-color
-          echo "✅ modules/security_groups — Init Complete"
+          terraform -chdir=infrastructure/modules/security_groups init \
+            -backend=false -input=false -no-color
+          echo "✅ infrastructure/modules/security_groups — Init Complete"
 
-      - name: "✅ Terraform Validate — modules/security_groups"
+      - name: "✅ Terraform Validate — infrastructure/modules/security_groups"
         id: validate-sg
         run: |
           echo "========================================================"
-          echo "  TERRAFORM VALIDATE — modules/security_groups"
+          echo "  TERRAFORM VALIDATE — infrastructure/modules/security_groups"
           echo "========================================================"
-          terraform -chdir=modules/security_groups validate -no-color
+          terraform -chdir=infrastructure/modules/security_groups validate -no-color
           echo "✅ SECURITY GROUPS MODULE — VALIDATION PASSED"
           echo "========================================================"
 
-      # ── ALB MODULE ──────────────────────────────────────────────────────
+      # ── ALB MODULE ────────────────────────────────────────────────────
 
-      - name: "📦 Terraform Init — modules/alb"
+      - name: "📦 Terraform Init — infrastructure/modules/alb"
         id: init-alb
         run: |
-          terraform -chdir=modules/alb init -backend=false -input=false -no-color
-          echo "✅ modules/alb — Init Complete"
+          terraform -chdir=infrastructure/modules/alb init \
+            -backend=false -input=false -no-color
+          echo "✅ infrastructure/modules/alb — Init Complete"
 
-      - name: "✅ Terraform Validate — modules/alb"
+      - name: "✅ Terraform Validate — infrastructure/modules/alb"
         id: validate-alb
         run: |
           echo "========================================================"
-          echo "  TERRAFORM VALIDATE — modules/alb"
+          echo "  TERRAFORM VALIDATE — infrastructure/modules/alb"
           echo "========================================================"
-          terraform -chdir=modules/alb validate -no-color
+          terraform -chdir=infrastructure/modules/alb validate -no-color
           echo "✅ ALB MODULE — VALIDATION PASSED"
           echo "========================================================"
 
-      # ── IAM MODULE ──────────────────────────────────────────────────────
+      # ── IAM MODULE ────────────────────────────────────────────────────
 
-      - name: "📦 Terraform Init — modules/iam"
+      - name: "📦 Terraform Init — infrastructure/modules/iam"
         id: init-iam
         run: |
-          terraform -chdir=modules/iam init -backend=false -input=false -no-color
-          echo "✅ modules/iam — Init Complete"
+          terraform -chdir=infrastructure/modules/iam init \
+            -backend=false -input=false -no-color
+          echo "✅ infrastructure/modules/iam — Init Complete"
 
-      - name: "✅ Terraform Validate — modules/iam"
+      - name: "✅ Terraform Validate — infrastructure/modules/iam"
         id: validate-iam
         run: |
           echo "========================================================"
-          echo "  TERRAFORM VALIDATE — modules/iam"
+          echo "  TERRAFORM VALIDATE — infrastructure/modules/iam"
           echo "========================================================"
-          terraform -chdir=modules/iam validate -no-color
+          terraform -chdir=infrastructure/modules/iam validate -no-color
           echo "✅ IAM MODULE — VALIDATION PASSED"
           echo "========================================================"
 
-      # ── COMPUTE MODULE ──────────────────────────────────────────────────
+      # ── COMPUTE MODULE ────────────────────────────────────────────────
 
-      - name: "📦 Terraform Init — modules/compute"
+      - name: "📦 Terraform Init — infrastructure/modules/compute"
         id: init-compute
         run: |
-          terraform -chdir=modules/compute init -backend=false -input=false -no-color
-          echo "✅ modules/compute — Init Complete"
+          terraform -chdir=infrastructure/modules/compute init \
+            -backend=false -input=false -no-color
+          echo "✅ infrastructure/modules/compute — Init Complete"
 
-      - name: "✅ Terraform Validate — modules/compute"
+      - name: "✅ Terraform Validate — infrastructure/modules/compute"
         id: validate-compute
         run: |
           echo "========================================================"
-          echo "  TERRAFORM VALIDATE — modules/compute"
+          echo "  TERRAFORM VALIDATE — infrastructure/modules/compute"
           echo "========================================================"
-          terraform -chdir=modules/compute validate -no-color
+          terraform -chdir=infrastructure/modules/compute validate -no-color
           echo "✅ COMPUTE MODULE — VALIDATION PASSED"
           echo "========================================================"
 
-      # ── RDS MODULE ──────────────────────────────────────────────────────
+      # ── RDS MODULE ────────────────────────────────────────────────────
 
-      - name: "📦 Terraform Init — modules/rds"
+      - name: "📦 Terraform Init — infrastructure/modules/rds"
         id: init-rds
         run: |
-          terraform -chdir=modules/rds init -backend=false -input=false -no-color
-          echo "✅ modules/rds — Init Complete"
+          terraform -chdir=infrastructure/modules/rds init \
+            -backend=false -input=false -no-color
+          echo "✅ infrastructure/modules/rds — Init Complete"
 
-      - name: "✅ Terraform Validate — modules/rds"
+      - name: "✅ Terraform Validate — infrastructure/modules/rds"
         id: validate-rds
         run: |
           echo "========================================================"
-          echo "  TERRAFORM VALIDATE — modules/rds"
+          echo "  TERRAFORM VALIDATE — infrastructure/modules/rds"
           echo "========================================================"
-          terraform -chdir=modules/rds validate -no-color
+          terraform -chdir=infrastructure/modules/rds validate -no-color
           echo "✅ RDS MODULE — VALIDATION PASSED"
           echo "========================================================"
 
-      # ── FINAL SUMMARY ────────────────────────────────────────────────────
+      # ── PLATFORM MODULE ───────────────────────────────────────────────
+
+      - name: "📦 Terraform Init — platform/"
+        id: init-platform
+        run: |
+          terraform -chdir=platform init \
+            -backend=false -input=false -no-color
+          echo "✅ platform/ — Init Complete"
+
+      - name: "✅ Terraform Validate — platform/"
+        id: validate-platform
+        run: |
+          echo "========================================================"
+          echo "  TERRAFORM VALIDATE — platform/"
+          echo "========================================================"
+          terraform -chdir=platform validate -no-color
+          echo "✅ PLATFORM MODULE — VALIDATION PASSED"
+          echo "========================================================"
+
+      # ── FINAL SUMMARY ─────────────────────────────────────────────────
 
       - name: "📊 Post Validation Report to Pull Request"
         if: always() && github.event_name == 'pull_request'
@@ -618,13 +705,14 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const modules = [
-              { name: 'Root Module',             validate: '${{ steps.validate-root.outcome }}'    },
-              { name: 'modules/vpc',             validate: '${{ steps.validate-vpc.outcome }}'     },
-              { name: 'modules/security_groups', validate: '${{ steps.validate-sg.outcome }}'      },
-              { name: 'modules/alb',             validate: '${{ steps.validate-alb.outcome }}'     },
-              { name: 'modules/iam',             validate: '${{ steps.validate-iam.outcome }}'     },
-              { name: 'modules/compute',         validate: '${{ steps.validate-compute.outcome }}' },
-              { name: 'modules/rds',             validate: '${{ steps.validate-rds.outcome }}'     },
+              { name: 'infrastructure/ (Root)',                  validate: '${{ steps.validate-root.outcome }}'     },
+              { name: 'infrastructure/modules/vpc',              validate: '${{ steps.validate-vpc.outcome }}'      },
+              { name: 'infrastructure/modules/security_groups',  validate: '${{ steps.validate-sg.outcome }}'       },
+              { name: 'infrastructure/modules/alb',              validate: '${{ steps.validate-alb.outcome }}'      },
+              { name: 'infrastructure/modules/iam',              validate: '${{ steps.validate-iam.outcome }}'      },
+              { name: 'infrastructure/modules/compute',          validate: '${{ steps.validate-compute.outcome }}'  },
+              { name: 'infrastructure/modules/rds',              validate: '${{ steps.validate-rds.outcome }}'      },
+              { name: 'platform/',                               validate: '${{ steps.validate-platform.outcome }}' },
             ];
             const icon  = o => o === 'success' ? '✅' : '❌';
             const rows  = modules.map(m =>
@@ -660,16 +748,24 @@ jobs:
           echo "  Stage 1 — Checkout & Cache      : ✅ Complete"
           echo "  Stage 2 — Terraform Format      : ✅ Complete"
           echo "  Stage 3 — Trivy Security Scan   : ✅ Complete"
-          echo "  Stage 4 — TFLint Linting        : ✅ Complete"
+          echo "  Stage 4 — TFLint Analysis       : ✅ Complete"
           echo "  Stage 5 — Terraform Validate    : ✅ Complete"
           echo ""
-          echo "  Repository  : ${{ github.repository }}"
-          echo "  Branch      : ${{ github.ref_name }}"
-          echo "  Commit      : ${{ github.sha }}"
-          echo "  Run ID      : ${{ github.run_id }}"
-          echo "  Completed   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "  VALIDATION RESULTS:"
+          echo "    infrastructure/ (root)          : ${{ steps.validate-root.outcome }}"
+          echo "    infrastructure/modules/vpc      : ${{ steps.validate-vpc.outcome }}"
+          echo "    infrastructure/modules/sg       : ${{ steps.validate-sg.outcome }}"
+          echo "    infrastructure/modules/alb      : ${{ steps.validate-alb.outcome }}"
+          echo "    infrastructure/modules/iam      : ${{ steps.validate-iam.outcome }}"
+          echo "    infrastructure/modules/compute  : ${{ steps.validate-compute.outcome }}"
+          echo "    infrastructure/modules/rds      : ${{ steps.validate-rds.outcome }}"
+          echo "    platform/                       : ${{ steps.validate-platform.outcome }}"
           echo ""
-          echo "  Security tab: GitHub → Security → Code Scanning"
+          echo "  Repository : ${{ github.repository }}"
+          echo "  Branch     : ${{ github.ref_name }}"
+          echo "  Commit     : ${{ github.sha }}"
+          echo "  Run ID     : ${{ github.run_id }}"
+          echo "  Completed  : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "========================================================"
           echo "  INFRASTRUCTURE VALIDATED — ENTERPRISE STANDARD ✅"
           echo "========================================================"
