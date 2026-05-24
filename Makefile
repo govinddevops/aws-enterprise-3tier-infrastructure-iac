@@ -367,3 +367,34 @@ app-delete:
 	@echo "$(YELLOW)Removing $(APP_NAME) from cluster$(RESET)"
 	@$(HELM) uninstall $(APP_NAME) --namespace apps 2>/dev/null || true
 	@echo "$(GREEN)✅ $(APP_NAME) removed$(RESET)"
+
+# ── QUICK RESTART AFTER PC REBOOT ────────────────────────────────────────────
+restart: ## Full restart after PC reboot — restores complete platform state
+	@echo "$(BLUE)Restarting complete platform after PC reboot...$(RESET)"
+	@echo ""
+	@echo "$(YELLOW)Step 1: Starting K3d cluster$(RESET)"
+	@k3d cluster start fintech-local 2>/dev/null || make cluster-up
+	@sleep 20
+	@$(KUBECTL) get nodes
+	@echo ""
+	@echo "$(YELLOW)Step 2: Re-bootstrapping platform$(RESET)"
+	@make platform-bootstrap
+	@echo ""
+	@echo "$(YELLOW)Step 3: Loading Docker image$(RESET)"
+	@make k3d-image-load
+	@echo ""
+	@echo "$(YELLOW)Step 4: Re-deploying application$(RESET)"
+	@$(HELM) upgrade --install payment-service \
+		$(HELM_CHART_DIR) \
+		--namespace apps \
+		--create-namespace \
+		--set image.tag=$(APP_VERSION) \
+		--set environment=local \
+		--timeout 120s
+	@echo ""
+	@echo "$(YELLOW)Step 5: Applying ArgoCD root app$(RESET)"
+	@sleep 30
+	@$(KUBECTL) apply -f gitops/argocd-apps/root-app.yaml
+	@echo ""
+	@echo "$(GREEN)✅ Platform fully restored$(RESET)"
+	@echo "$(GREEN)Run: make argocd-open — then open http://localhost:8080$(RESET)"
