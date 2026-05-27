@@ -1,0 +1,116 @@
+################################################################################
+# FILE        : production-cloud-manifests/eks/cluster-blueprint.yaml
+# DESCRIPTION : AWS EKS cluster configuration blueprint.
+#               Reference design for migrating from local K3d to EKS.
+#               NOT deployed — demonstrates production architecture awareness.
+#
+# MIGRATION PATH:
+#   Local K3d cluster (fintech-local)
+#     → AWS EKS cluster (fintech-prod)
+#       → Same Helm charts, same GitOps manifests
+#         → Only destination and IAM references change
+#
+# HONEST NOTE:
+#   This blueprint uses eksctl syntax for readability.
+#   Production would use Terraform EKS module (terraform-aws-modules/eks).
+#   Both approaches are valid — Terraform preferred for IaC consistency.
+################################################################################
+
+# ── EKS CLUSTER DESIGN ───────────────────────────────────────────────────────
+# This would be expressed in Terraform as:
+#   module "eks" {
+#     source          = "terraform-aws-modules/eks/aws"
+#     version         = "~> 20.0"
+#     cluster_name    = "fintech-prod"
+#     cluster_version = "1.28"
+#     vpc_id          = module.vpc.vpc_id
+#     subnet_ids      = module.vpc.private_subnet_ids
+#   }
+
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: fintech-prod
+  region: ap-south-1
+  version: "1.28"
+  tags:
+    Project: enterprise-3tier
+    Environment: prod
+    ManagedBy: Terraform
+    Owner: devops-platform-team
+
+# ── VPC CONFIGURATION ────────────────────────────────────────────────────────
+# Reuses existing VPC from infrastructure/ Terraform modules
+# vpc_id and subnet_ids come from infrastructure module outputs
+vpc:
+  # These would be populated from Terraform outputs:
+  # id: module.vpc.vpc_id
+  # subnets:
+  #   private:
+  #     ap-south-1a: { id: subnet-xxx }
+  #     ap-south-1b: { id: subnet-xxx }
+  clusterEndpoints:
+    # Private endpoint — control plane not accessible from internet
+    privateAccess: true
+    # Public endpoint — restricted to corporate VPN CIDR
+    publicAccess: true
+    publicAccessCIDRs:
+      - "10.0.0.0/8"
+      # Replace with actual corporate VPN IP range
+
+# ── NODE GROUPS ───────────────────────────────────────────────────────────────
+managedNodeGroups:
+  - name: platform-nodes
+    instanceType: t3.medium
+    minSize: 2
+    maxSize: 4
+    desiredCapacity: 2
+    # Nodes in private subnets — no public IPs
+    privateNetworking: true
+    # IMDSv2 enforced — mirrors local K3d Launch Template setting
+    instanceMetadataOptions:
+      httpTokens: required
+      httpPutResponseHopLimit: 1
+    labels:
+      role: platform
+      environment: prod
+    tags:
+      ManagedBy: Terraform
+      Environment: prod
+    # Encryption at rest — mirrors EBS encryption in infrastructure/
+    volumeEncrypted: true
+    volumeSize: 30
+
+# ── IAM ───────────────────────────────────────────────────────────────────────
+# IRSA enabled — allows pods to assume IAM roles via ServiceAccount
+iam:
+  withOIDC: true
+  serviceAccounts:
+    # payment-service IAM role — mirrors local RBAC ServiceAccount
+    - metadata:
+        name: payment-service
+        namespace: apps
+        labels:
+          app: payment-service
+      attachPolicyARNs:
+        # Custom policy ARN from infrastructure/modules/iam/
+        # Grants: SecretsManager read, CloudWatch write, S3 read
+        - arn:aws:iam::ACCOUNT_ID:policy/enterprise-3tier-prod-s3-access-policy
+        - arn:aws:iam::ACCOUNT_ID:policy/enterprise-3tier-prod-secrets-access-policy
+        - arn:aws:iam::ACCOUNT_ID:policy/enterprise-3tier-prod-cloudwatch-access-policy
+
+# ── ADD-ONS ───────────────────────────────────────────────────────────────────
+addons:
+  # EBS CSI driver for persistent storage
+  - name: aws-ebs-csi-driver
+    version: latest
+  # CoreDNS for cluster DNS
+  - name: coredns
+    version: latest
+  # kube-proxy for networking
+  - name: kube-proxy
+    version: latest
+  # VPC CNI for pod networking
+  - name: vpc-cni
+    version: latest

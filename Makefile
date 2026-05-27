@@ -398,3 +398,77 @@ restart: ## Full restart after PC reboot — restores complete platform state
 	@echo ""
 	@echo "$(GREEN)✅ Platform fully restored$(RESET)"
 	@echo "$(GREEN)Run: make argocd-open — then open http://localhost:8080$(RESET)"
+
+
+# ── PHASE 4: OBSERVABILITY ────────────────────────────────────────────────────
+
+PROMETHEUS_VERSION := 58.3.3
+LOKI_VERSION       := 6.6.2
+
+observability-install:
+	@echo "$(BLUE)Installing Observability Stack$(RESET)"
+	@echo "$(YELLOW)Adding Helm repositories...$(RESET)"
+	@$(HELM) repo add prometheus-community \
+		https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+	@$(HELM) repo add grafana \
+		https://grafana.github.io/helm-charts 2>/dev/null || true
+	@$(HELM) repo update
+	@echo ""
+	@echo "$(YELLOW)Installing kube-prometheus-stack...$(RESET)"
+	@$(HELM) upgrade --install kube-prometheus-stack \
+		prometheus-community/kube-prometheus-stack \
+		--namespace observability \
+		--create-namespace \
+		--version $(PROMETHEUS_VERSION) \
+		--values platform/observability/prometheus-values.yaml \
+		--timeout 300s || true
+	@echo ""
+	@echo "$(YELLOW)Installing Loki stack...$(RESET)"
+	@$(HELM) upgrade --install loki \
+		grafana/loki-stack \
+		--namespace observability \
+		--version $(LOKI_VERSION) \
+		--values platform/observability/loki-values.yaml \
+		--timeout 180s || true
+	@echo ""
+	@sleep 20
+	@$(KUBECTL) get pods -n observability
+	@echo ""
+	@echo "$(GREEN)✅ Observability stack installed$(RESET)"
+	@echo "$(GREEN)Run: make grafana-open to access dashboards$(RESET)"
+
+grafana-open:
+	@echo "$(BLUE)Port-forwarding Grafana to http://localhost:3005$(RESET)"
+	@echo "$(YELLOW)Username: admin | Password: run 'make grafana-password'$(RESET)"
+	@$(KUBECTL) port-forward svc/kube-prometheus-stack-grafana 3005:80 -n observability &
+	@sleep 5
+	@echo "$(GREEN)Open: http://localhost:3005$(RESET)"
+
+grafana-password:
+	@echo "$(BLUE)Grafana admin password:$(RESET)"
+	@$(KUBECTL) get secret kube-prometheus-stack-grafana \
+		-n observability \
+		-o jsonpath="{.data.admin-password}" | base64 -d
+	@echo ""
+
+prometheus-open:
+	@echo "$(BLUE)Port-forwarding Prometheus to http://localhost:9090$(RESET)"
+	@$(KUBECTL) port-forward \
+		svc/kube-prometheus-stack-prometheus \
+		9090:9090 -n observability &
+	@sleep 2
+	@echo "$(GREEN)Open: http://localhost:9090$(RESET)"
+
+observability-status:
+	@echo "$(BLUE)Observability Stack Status$(RESET)"
+	@echo ""
+	@$(KUBECTL) get pods -n observability
+	@echo ""
+	@$(KUBECTL) get svc -n observability
+
+rbac-apply:
+	@echo "$(BLUE)Applying RBAC policies for zero-trust simulation$(RESET)"
+	@$(KUBECTL) apply -f platform/rbac/payment-service-rbac.yaml
+	@echo "$(GREEN)✅ RBAC policies applied$(RESET)"
+	@$(KUBECTL) get serviceaccounts,roles,rolebindings -n apps# ── PHASE 4: OBSERVABILITY ────────────────────────────────────────────────────
+

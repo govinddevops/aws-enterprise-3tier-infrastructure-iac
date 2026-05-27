@@ -1,0 +1,278 @@
+################################################################################
+# FILE        : platform/observability/prometheus-values.yaml
+# DESCRIPTION : kube-prometheus-stack Helm values for local K3d deployment.
+#               Heavily resource-constrained for laptop/WSL operation.
+#               Preserves production operational patterns at minimal cost.
+#
+# STACK INCLUDES:
+#   - Prometheus    : metrics collection + alerting rules
+#   - Alertmanager  : alert routing (local — no external webhook)
+#   - Grafana       : visualisation dashboards
+#   - node-exporter : host-level metrics
+#   - kube-state-metrics: Kubernetes object metrics
+################################################################################
+
+# ── GRAFANA ───────────────────────────────────────────────────────────────────
+grafana:
+  enabled: true
+
+  # Admin credentials
+  adminPassword: "fintech-local-2024"
+
+  # Resource limits for K3d
+  resources:
+    limits:
+      cpu: 300m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+  # Persistence disabled — local ephemeral cluster
+  persistence:
+    enabled: false
+
+  # Pre-configure Loki as datasource
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki:3100
+      access: proxy
+      isDefault: false
+
+  # Grafana INI overrides
+  grafana.ini:
+    server:
+      root_url: "http://localhost:3000"
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+
+  # Pre-load dashboards via ConfigMap
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: fintech-platform
+          orgId: 1
+          folder: "FinTech Platform"
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/fintech-platform
+
+  # Import community dashboards by ID
+  dashboards:
+    fintech-platform:
+      # ArgoCD dashboard — shows sync status, app health
+      argocd:
+        gnetId: 14584
+        revision: 1
+        datasource: Prometheus
+      # Kubernetes cluster overview
+      k8s-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+      # Pod resource usage
+      k8s-pods:
+        gnetId: 6417
+        revision: 1
+        datasource: Prometheus
+
+# ── PROMETHEUS ────────────────────────────────────────────────────────────────
+prometheus:
+  enabled: true
+
+  prometheusSpec:
+    # Retention — 7 days is sufficient for local dev
+    retention: 7d
+
+    # Storage — ephemeral for local cluster
+    storageSpec: {}
+
+    # Resource limits for K3d
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+    # Scrape interval — 30s is fine for local
+    scrapeInterval: "30s"
+    evaluationInterval: "30s"
+
+    # Pick up all ServiceMonitors in all namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    # Additional scrape configs for payment-service
+    additionalScrapeConfigs:
+      - job_name: payment-service
+        static_configs:
+          - targets:
+              - payment-service.apps.svc.cluster.local:80
+        metrics_path: /metrics
+        scrape_interval: 30s
+
+# ── ALERTMANAGER ─────────────────────────────────────────────────────────────
+alertmanager:
+  enabled: true
+
+  alertmanagerSpec:
+    resources:
+      limits:
+        cpu: 100m
+        memory: 64Mi
+      requests:
+        cpu: 20m
+        memory: 32Mi
+
+  # Local alerting — log only, no external webhook
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by:
+        - namespace
+        - alertname
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: "null-receiver"
+      routes:
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: "null-receiver"
+        - matchers:
+            - severity = "critical"
+          receiver: "local-log"
+    receivers:
+      - name: "null-receiver"
+      - name: "local-log"
+
+# ── PROMETHEUS RULES — FINTECH OPERATIONAL ALERTS ────────────────────────────
+# These alert rules reflect real operational concerns:
+#   - Pod restarts = application instability
+#   - High CPU = capacity planning signal
+#   - Payment errors = business impact
+additionalPrometheusRulesMap:
+  fintech-alerts:
+    groups:
+      - name: fintech.payment-service
+        interval: 30s
+        rules:
+          # Alert: Pod restarting frequently
+          - alert: PaymentServicePodRestarting
+            expr: >
+              increase(kube_pod_container_status_restarts_total{
+                namespace="apps",
+                pod=~"payment-service.*"
+              }[15m]) > 2
+            for: 5m
+            labels:
+              severity: warning
+              service: payment-service
+              team: platform
+            annotations:
+              summary: "Payment service pod restarting"
+              description: >
+                Pod {{ $labels.pod }} has restarted
+                {{ $value | printf "%.0f" }} times in 15 minutes.
+                Possible OOMKill or application crash.
+
+          # Alert: High CPU on payment-service
+          - alert: PaymentServiceHighCPU
+            expr: >
+              rate(container_cpu_usage_seconds_total{
+                namespace="apps",
+                pod=~"payment-service.*"
+              }[5m]) * 1000 > 200
+            for: 5m
+            labels:
+              severity: warning
+              service: payment-service
+              team: platform
+            annotations:
+              summary: "Payment service high CPU usage"
+              description: >
+                Payment service CPU is above 200m millicores
+                for 5 minutes. Current: {{ $value | printf "%.0f" }}m.
+
+          # Alert: Pod not ready
+          - alert: PaymentServicePodNotReady
+            expr: >
+              kube_pod_status_ready{
+                namespace="apps",
+                pod=~"payment-service.*",
+                condition="true"
+              } == 0
+            for: 2m
+            labels:
+              severity: critical
+              service: payment-service
+              team: platform
+            annotations:
+              summary: "Payment service pod not ready"
+              description: >
+                Pod {{ $labels.pod }} has been in not-ready
+                state for 2 minutes.
+
+      - name: fintech.kubernetes
+        interval: 30s
+        rules:
+          # Alert: Node memory pressure
+          - alert: K3dNodeMemoryPressure
+            expr: >
+              kube_node_status_condition{
+                condition="MemoryPressure",
+                status="true"
+              } == 1
+            for: 2m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "K3d node memory pressure"
+              description: >
+                Node {{ $labels.node }} is under memory
+                pressure. K3d cluster may need restart.
+
+# ── NODE EXPORTER ─────────────────────────────────────────────────────────────
+nodeExporter:
+  enabled: true
+  resources:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+
+# ── KUBE STATE METRICS ────────────────────────────────────────────────────────
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+# ── DISABLED COMPONENTS ───────────────────────────────────────────────────────
+# Disabled to reduce K3d resource pressure
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false

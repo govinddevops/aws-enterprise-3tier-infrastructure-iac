@@ -1,0 +1,106 @@
+################################################################################
+# FILE        : gitops/argocd-apps/observability-app.yaml
+# DESCRIPTION : ArgoCD Application for observability stack.
+#               Manages kube-prometheus-stack and loki-stack via GitOps.
+#               Changes to platform/observability/values files in Git
+#               automatically trigger Helm upgrades via ArgoCD.
+#
+# NOTE        : Observability uses Helm source type (not directory).
+#               ArgoCD supports multiple source types — this demonstrates
+#               managing infrastructure Helm releases via GitOps patterns.
+################################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability-prometheus
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: observability-prometheus
+    app.kubernetes.io/managed-by: argocd
+    platform.fintech/layer: observability
+    environment: local
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: "58.3.3"
+    helm:
+      releaseName: kube-prometheus-stack
+      valueFiles: []
+      values: |
+        grafana:
+          enabled: true
+          adminPassword: "fintech-local-2024"
+          persistence:
+            enabled: false
+          resources:
+            limits:
+              cpu: 300m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+        prometheus:
+          enabled: true
+          prometheusSpec:
+            retention: 7d
+            storageSpec: {}
+            resources:
+              limits:
+                cpu: 500m
+                memory: 512Mi
+              requests:
+                cpu: 100m
+                memory: 256Mi
+            serviceMonitorSelectorNilUsesHelmValues: false
+        alertmanager:
+          enabled: true
+          alertmanagerSpec:
+            resources:
+              limits:
+                cpu: 100m
+                memory: 64Mi
+              requests:
+                cpu: 20m
+                memory: 32Mi
+        kubeEtcd:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        nodeExporter:
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+        kube-state-metrics:
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=false
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

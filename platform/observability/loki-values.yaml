@@ -1,0 +1,146 @@
+################################################################################
+# FILE        : platform/observability/loki-values.yaml
+# DESCRIPTION : Loki stack values for local K3d log aggregation.
+#               loki-stack includes Loki + Promtail.
+#               Promtail runs as DaemonSet — collects logs from all pods.
+#               Loki stores logs locally — no S3 backend needed locally.
+################################################################################
+
+# ── LOKI ──────────────────────────────────────────────────────────────────────
+loki:
+  enabled: true
+
+  # Local filesystem storage — acceptable for K3d
+  # Production would use S3 backend
+  isDefault: false
+
+  persistence:
+    enabled: false
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+  config:
+    auth_enabled: false
+
+    ingester:
+      chunk_idle_period: 3m
+      chunk_block_size: 262144
+      chunk_retain_period: 1m
+      max_transfer_retries: 0
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
+
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+
+    schema_config:
+      configs:
+        - from: "2024-01-01"
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+
+    server:
+      http_listen_port: 3100
+
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /data/loki/boltdb-shipper-active
+        cache_location: /data/loki/boltdb-shipper-cache
+        shared_store: filesystem
+      filesystem:
+        directory: /data/loki/chunks
+
+    chunk_store_config:
+      max_look_back_period: 0s
+
+    table_manager:
+      retention_deletes_enabled: false
+      retention_period: 0s
+
+    compactor:
+      working_directory: /data/loki/boltdb-shipper-compactor
+      shared_store: filesystem
+
+# ── PROMTAIL ─────────────────────────────────────────────────────────────────
+# Promtail = log shipper — runs on every node as DaemonSet
+# Collects logs from /var/log/pods/* and sends to Loki
+promtail:
+  enabled: true
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 20m
+      memory: 64Mi
+
+  config:
+    logLevel: info
+    serverPort: 3101
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+
+    snippets:
+      pipelineStages:
+        # Add Kubernetes metadata to every log line
+        - docker: {}
+        - cri: {}
+        - match:
+            selector: '{namespace="apps"}'
+            stages:
+              # Tag payment-service logs for easy filtering
+              - static_labels:
+                  service: payment-service
+                  layer: application
+              # Parse JSON logs from FastAPI
+              - json:
+                  expressions:
+                    level: level
+                    message: message
+                    correlation_id: correlation_id
+        - match:
+            selector: '{namespace="argocd"}'
+            stages:
+              - static_labels:
+                  service: argocd
+                  layer: gitops
+        - match:
+            selector: '{namespace="platform"}'
+            stages:
+              - static_labels:
+                  service: nginx-ingress
+                  layer: platform
+
+# ── GRAFANA ───────────────────────────────────────────────────────────────────
+# Disable Grafana in loki-stack
+# We use the one from kube-prometheus-stack instead
+grafana:
+  enabled: false
+
+# ── FLUENT BIT ────────────────────────────────────────────────────────────────
+fluent-bit:
+  enabled: false
+
+# ── FILEBEAT ─────────────────────────────────────────────────────────────────
+filebeat:
+  enabled: false
+
+# ── LOGSTASH ─────────────────────────────────────────────────────────────────
+logstash:
+  enabled: false

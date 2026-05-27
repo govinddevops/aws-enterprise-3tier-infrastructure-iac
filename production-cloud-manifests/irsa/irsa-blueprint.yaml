@@ -1,0 +1,89 @@
+################################################################################
+# FILE        : production-cloud-manifests/irsa/irsa-blueprint.yaml
+# DESCRIPTION : IRSA (IAM Roles for Service Accounts) pattern blueprint.
+#
+# WHAT IS IRSA:
+#   IRSA maps a Kubernetes ServiceAccount to an AWS IAM Role.
+#   When a pod uses this ServiceAccount, it automatically gets
+#   temporary AWS credentials via the pod's identity token.
+#   Zero hardcoded AWS credentials anywhere in the application.
+#
+# LOCAL EQUIVALENT:
+#   platform/rbac/payment-service-rbac.yaml ServiceAccount
+#   (controls K8s API access, not AWS API access)
+#
+# MIGRATION STEP:
+#   1. Create IAM OIDC provider for EKS cluster
+#   2. Create IAM Role with trust policy referencing OIDC provider
+#   3. Annotate ServiceAccount with IAM Role ARN
+#   4. Application uses boto3/SDK — credentials auto-injected via IRSA
+################################################################################
+
+---
+# ── STEP 1: ServiceAccount with IRSA annotation ──────────────────────────────
+# This is what changes from local → EKS:
+# Only the annotation. Everything else stays identical.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-service
+  namespace: apps
+  labels:
+    app: payment-service
+    platform.fintech/component: irsa
+  annotations:
+    # THIS is the IRSA magic — maps K8s identity to AWS IAM Role
+    # Local K3d: this annotation is present but unused
+    # AWS EKS:   this annotation activates IRSA credential injection
+    eks.amazonaws.com/role-arn: >
+      arn:aws:iam::ACCOUNT_ID:role/enterprise-3tier-prod-payment-service-irsa
+    # Token expiry — 24 hours is production-safe
+    eks.amazonaws.com/token-expiration: "86400"
+automountServiceAccountToken: true
+# true required for IRSA to inject credentials via projected volume
+
+---
+# ── STEP 2: IAM Trust Policy (Terraform resource) ───────────────────────────
+# This would be in infrastructure/modules/iam/main.tf as:
+#
+# data "aws_iam_policy_document" "payment_service_irsa_trust" {
+#   statement {
+#     effect  = "Allow"
+#     actions = ["sts:AssumeRoleWithWebIdentity"]
+#
+#     principals {
+#       type = "Federated"
+#       identifiers = [
+#         "arn:aws:iam::ACCOUNT_ID:oidc-provider/oidc.eks.ap-south-1.amazonaws.com/id/CLUSTER_ID"
+#       ]
+#     }
+#
+#     condition {
+#       test     = "StringEquals"
+#       variable = "oidc.eks.ap-south-1.amazonaws.com/id/CLUSTER_ID:sub"
+#       values   = ["system:serviceaccount:apps:payment-service"]
+#     }
+#   }
+# }
+#
+# The condition scopes the trust to ONLY the payment-service
+# ServiceAccount in the apps namespace.
+# No other pod or namespace can assume this role.
+
+---
+# ── STEP 3: Application code change (none required) ──────────────────────────
+# Python boto3 automatically picks up IRSA credentials:
+#
+# import boto3
+# import json
+#
+# def get_db_password():
+#     # boto3 auto-uses IRSA token — no credentials in code
+#     client = boto3.client('secretsmanager', region_name='ap-south-1')
+#     response = client.get_secret_value(
+#         SecretId='enterprise-3tier/prod/rds/master-password'
+#     )
+#     return json.loads(response['SecretString'])['password']
+#
+# Zero code changes needed between local (no IRSA) and EKS (IRSA active).
+# The SDK credential chain handles both cases automatically.

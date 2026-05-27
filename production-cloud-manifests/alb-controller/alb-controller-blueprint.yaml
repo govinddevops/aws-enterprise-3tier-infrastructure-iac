@@ -1,0 +1,85 @@
+################################################################################
+# FILE        : production-cloud-manifests/alb-controller/alb-controller-blueprint.yaml
+# DESCRIPTION : AWS Load Balancer Controller Ingress pattern.
+#               Replaces NGINX Ingress in EKS production deployment.
+#
+# LOCAL EQUIVALENT:
+#   platform/observability NGINX Ingress
+#   → ingress.yaml with ingressClassName: nginx
+#
+# PRODUCTION EQUIVALENT:
+#   AWS Load Balancer Controller
+#   → ingress.yaml with ingressClassName: alb
+#   → Creates real AWS ALB automatically from Ingress annotation
+#
+# MIGRATION STEP:
+#   Change ingressClassName: nginx → alb
+#   Add ALB-specific annotations
+#   Everything else stays identical
+################################################################################
+
+---
+# ── PRODUCTION INGRESS — payment-service on EKS ──────────────────────────────
+# Compare with: applications/payment-service/helm-chart/templates/ingress.yaml
+# Only the annotations change. Spec stays identical.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: payment-service
+  namespace: apps
+  labels:
+    app: payment-service
+    environment: prod
+  annotations:
+    # ── AWS Load Balancer Controller annotations ──
+    # These replace the nginx.ingress.kubernetes.io annotations
+
+    # Use AWS Application Load Balancer
+    kubernetes.io/ingress.class: alb
+
+    # Internet-facing ALB — same as infrastructure/modules/alb/main.tf
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # Target pods directly (IP mode) vs via NodePort
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # ACM certificate ARN for HTTPS — from infrastructure/ ACM resource
+    alb.ingress.kubernetes.io/certificate-arn: >
+      arn:aws:acm:ap-south-1:ACCOUNT_ID:certificate/CERT_ID
+
+    # Redirect HTTP to HTTPS
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+    # Security group — from infrastructure/modules/security_groups/ output
+    alb.ingress.kubernetes.io/security-groups: sg-XXXXXXXX
+
+    # Health check matches our /health endpoint
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+
+    # Tags — mirrors infrastructure/ default_tags
+    alb.ingress.kubernetes.io/tags: >
+      Environment=prod,
+      Project=enterprise-3tier,
+      ManagedBy=Terraform,
+      Owner=devops-platform-team
+
+spec:
+  # ALB ingress class — replaces nginx
+  ingressClassName: alb
+  rules:
+    - host: api.fintech.example.com
+      # Production: real domain via Route 53
+      # Local: api.fintech.local via /etc/hosts
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: payment-service
+                port:
+                  number: 80

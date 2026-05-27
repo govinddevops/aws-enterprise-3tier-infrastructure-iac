@@ -1,0 +1,178 @@
+################################################################################
+# FILE        : platform/rbac/payment-service-rbac.yaml
+# DESCRIPTION : Zero-trust access simulation using Kubernetes RBAC.
+#
+# WHAT THIS DEMONSTRATES:
+#   Production Kubernetes security requires every workload to have
+#   its own ServiceAccount with minimal permissions.
+#   This is the local simulation of IRSA (IAM Roles for Service Accounts)
+#   patterns used in AWS EKS.
+#
+#   ServiceAccount  = workload identity (like an IAM Role)
+#   Role            = permission set (like an IAM Policy)
+#   RoleBinding     = attaches Role to ServiceAccount (like IAM attachment)
+#
+# LOCAL vs PRODUCTION:
+#   Local  : ServiceAccount + RBAC controls K8s API access only
+#   AWS EKS: IRSA maps ServiceAccount to IAM Role → controls AWS API access
+#   Pattern is identical — only the permission scope changes
+#
+# RESOURCES CREATED:
+#   1. ServiceAccount    : payment-service identity
+#   2. Role              : minimal read permissions for health checks
+#   3. RoleBinding       : binds role to service account
+#   4. NetworkPolicy     : restricts pod-to-pod traffic (zero-trust)
+################################################################################
+
+---
+# ── SERVICE ACCOUNT ──────────────────────────────────────────────────────────
+# Every pod should have its own ServiceAccount — never use default.
+# In EKS this ServiceAccount would be annotated with an IAM Role ARN.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-service
+  namespace: apps
+  labels:
+    app: payment-service
+    app.kubernetes.io/managed-by: kubectl
+    platform.fintech/component: payment-service
+  annotations:
+    # This annotation would be populated in EKS with real IRSA ARN:
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/payment-service-role
+    platform.fintech/irsa-ready: "true"
+    platform.fintech/description: "Identity for payment-service pods"
+automountServiceAccountToken: false
+# false = pods do not auto-mount token unless explicitly needed
+# Production security best practice
+
+---
+# ── ROLE ─────────────────────────────────────────────────────────────────────
+# Minimal permissions — principle of least privilege at K8s level.
+# Payment service only needs to read its own ConfigMap for runtime config.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: payment-service-role
+  namespace: apps
+  labels:
+    app: payment-service
+    platform.fintech/component: rbac
+rules:
+  # Allow reading ConfigMaps — for runtime application configuration
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+    resourceNames:
+      - payment-service-config
+  # Allow reading own pod info — for health check metadata
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+    # Restrict to own namespace only — cannot read other namespaces
+
+---
+# ── ROLE BINDING ─────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: payment-service-rolebinding
+  namespace: apps
+  labels:
+    app: payment-service
+    platform.fintech/component: rbac
+subjects:
+  - kind: ServiceAccount
+    name: payment-service
+    namespace: apps
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: payment-service-role
+
+---
+# ── NETWORK POLICY — ZERO TRUST ──────────────────────────────────────────────
+# NetworkPolicy implements zero-trust networking at pod level.
+# Default: deny all ingress + egress.
+# Then explicitly allow only what is needed.
+#
+# This simulates the zero-trust pattern used in production
+# with service mesh (without actually needing Istio).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: payment-service-netpol
+  namespace: apps
+  labels:
+    app: payment-service
+    platform.fintech/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: payment-service
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow ingress ONLY from NGINX Ingress Controller in platform namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Allow ingress from Prometheus for metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 8000
+
+  egress:
+    # Allow DNS resolution — required for all pods
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow egress to observability namespace (push metrics)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 9090
+
+---
+# ── CONFIGMAP — RUNTIME CONFIG ────────────────────────────────────────────────
+# Non-sensitive runtime config for payment-service.
+# Sensitive config (DB passwords, API keys) would come from
+# Secrets Manager via IRSA in production — never in ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payment-service-config
+  namespace: apps
+  labels:
+    app: payment-service
+    platform.fintech/component: config
+data:
+  APP_ENV: "local"
+  APP_VERSION: "1.0.0"
+  SERVICE_NAME: "payment-service"
+  LOG_LEVEL: "info"
+  # In production these would reference Secrets Manager paths:
+  # DB_SECRET_ARN: "arn:aws:secretsmanager:ap-south-1:ACCOUNT:secret:payment-service/db"

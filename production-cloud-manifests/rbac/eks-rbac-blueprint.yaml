@@ -1,0 +1,114 @@
+################################################################################
+# FILE        : production-cloud-manifests/rbac/eks-rbac-blueprint.yaml
+# DESCRIPTION : EKS RBAC pattern + aws-auth ConfigMap access control.
+#
+# LOCAL EQUIVALENT:
+#   platform/rbac/payment-service-rbac.yaml
+#   (identical structure — only IAM references added for EKS)
+################################################################################
+
+---
+# ── aws-auth ConfigMap — EKS IAM to K8s RBAC mapping ────────────────────────
+# This ConfigMap controls which AWS IAM entities can access the EKS cluster.
+# Local K3d has no equivalent — cluster access is via kubeconfig directly.
+#
+# In production this is managed via Terraform:
+# resource "kubernetes_config_map_v1_data" "aws_auth" { ... }
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aws-auth
+  namespace: kube-system
+data:
+  mapRoles: |
+    # Node group role — allows worker nodes to join cluster
+    - rolearn: arn:aws:iam::ACCOUNT_ID:role/fintech-prod-node-group-role
+      username: system:node:{{EC2PrivateDNSName}}
+      groups:
+        - system:bootstrappers
+        - system:nodes
+
+    # DevOps engineer role — read-write access to platform namespaces
+    - rolearn: arn:aws:iam::ACCOUNT_ID:role/devops-engineer-role
+      username: devops-engineer
+      groups:
+        - fintech-platform-devops
+
+    # CI/CD pipeline role — deploy-only access to apps namespace
+    - rolearn: arn:aws:iam::ACCOUNT_ID:role/github-actions-deploy-role
+      username: github-actions
+      groups:
+        - fintech-platform-deploy
+
+---
+# ── ClusterRole: platform-devops ─────────────────────────────────────────────
+# Full access to platform namespaces — for DevOps engineers
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fintech-platform-devops
+  labels:
+    platform.fintech/component: rbac
+rules:
+  - apiGroups: ["", "apps", "batch", "extensions"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["*"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications", "appprojects"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+---
+# ── ClusterRoleBinding: platform-devops ──────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fintech-platform-devops-binding
+  labels:
+    platform.fintech/component: rbac
+subjects:
+  - kind: Group
+    name: fintech-platform-devops
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: fintech-platform-devops
+
+---
+# ── Role: deploy-only in apps namespace ──────────────────────────────────────
+# CI/CD pipeline can only deploy to apps namespace — nothing else
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fintech-deploy-role
+  namespace: apps
+  labels:
+    platform.fintech/component: rbac
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ── RoleBinding: github-actions deploy ───────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fintech-deploy-binding
+  namespace: apps
+  labels:
+    platform.fintech/component: rbac
+subjects:
+  - kind: Group
+    name: fintech-platform-deploy
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: fintech-deploy-role
